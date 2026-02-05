@@ -73,9 +73,18 @@
                 }
                 @if (activeSession.IsProcessing)
                 {
-                    <div class="activity-indicator">
-                        <span class="activity-spinner">●</span>
-                        <span class="activity-text">@(string.IsNullOrEmpty(currentActivity) ? "Working..." : currentActivity)</span>
+                    <div class="activity-log">
+                        @foreach (var activity in activityLog)
+                        {
+                            <div class="activity-entry">@activity</div>
+                        }
+                        @if (!string.IsNullOrEmpty(currentActivity))
+                        {
+                            <div class="activity-entry current">
+                                <span class="activity-spinner">●</span>
+                                @currentActivity
+                            </div>
+                        }
                     </div>
                 }
             }
@@ -116,6 +125,7 @@
     private string userInput = "";
     private string streamingContent = "";
     private string currentActivity = "";
+    private List<string> activityLog = new();
     private string? initError;
     private string? lastError;
     private string debugLog = "";
@@ -149,6 +159,10 @@
         if (sessionName == CopilotService.ActiveSessionName)
         {
             currentActivity = activity;
+            if (!string.IsNullOrEmpty(activity))
+            {
+                activityLog.Add(activity);
+            }
             InvokeAsync(async () =>
             {
                 StateHasChanged();
@@ -259,6 +273,7 @@
         userInput = "";
         streamingContent = "";
         currentActivity = "";
+        activityLog.Clear();
         lastError = null;
 
         try

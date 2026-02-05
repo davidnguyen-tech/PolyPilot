@@ -3,7 +3,7 @@
 # then kills the old instance(s) for a seamless handoff.
 set -e
 
-PROJECT_DIR="/Users/shneuvil/Projects/AutoPilot.App"
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/bin/Debug/net10.0-maccatalyst/maccatalyst-arm64"
 APP_NAME="AutoPilot.App.app"
 STAGING_DIR="$PROJECT_DIR/bin/staging"

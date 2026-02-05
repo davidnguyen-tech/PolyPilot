@@ -348,25 +348,32 @@
     word-break: break-all;
 }
 
-.activity-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+.activity-log {
     padding: 0.5rem 1rem;
-    color: rgba(255,255,255,0.6);
-    font-size: 0.95rem;
+    color: rgba(255,255,255,0.5);
+    font-size: 0.85rem;
+    border-left: 2px solid rgba(255,255,255,0.1);
+    margin-left: 3rem;
+    margin-bottom: 0.5rem;
+}
+
+.activity-entry {
+    padding: 0.15rem 0;
+    opacity: 0.5;
+}
+
+.activity-entry.current {
+    opacity: 1;
+    color: rgba(255,255,255,0.7);
 }
 
 .activity-spinner {
     color: #fbbf24;
     animation: pulse-activity 1s infinite;
+    margin-right: 0.4rem;
 }
 
 @keyframes pulse-activity {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
-}
-
-.activity-text {
-    font-style: italic;
 }

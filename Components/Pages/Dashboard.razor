@@ -36,7 +36,7 @@
 
                     <div class="card-messages">
                         @{
-                            var lastMessages = session.History.TakeLast(3).ToList();
+                            var lastMessages = session.History.TakeLast(6).ToList();
                         }
                         @if (!lastMessages.Any())
                         {
@@ -48,15 +48,22 @@
                             {
                                 <div class="card-msg @(msg.IsUser ? "user" : "assistant")">
                                     <span class="card-msg-role">@(msg.IsUser ? "You" : "AI")</span>
-                                    <span class="card-msg-text">@Truncate(msg.Content, 150)</span>
+                                    <span class="card-msg-text">@msg.Content</span>
                                 </div>
                             }
                         }
                         @if (session.IsProcessing)
                         {
+                            @if (streamingBySession.TryGetValue(session.Name, out var streaming) && !string.IsNullOrEmpty(streaming))
+                            {
+                                <div class="card-msg assistant">
+                                    <span class="card-msg-role">AI</span>
+                                    <span class="card-msg-text">@streaming</span>
+                                </div>
+                            }
                             <div class="card-msg assistant">
                                 <span class="card-msg-role">AI</span>
-                                <span class="card-msg-text thinking">Thinking...</span>
+                                <span class="card-msg-text thinking">@(activityBySession.TryGetValue(session.Name, out var act) && !string.IsNullOrEmpty(act) ? act : "Thinking...")</span>
                             </div>
                         }
                     </div>
@@ -88,11 +95,15 @@
 @code {
     private List<AgentSessionInfo> sessions = new();
     private HashSet<string> completedSessions = new();
+    private Dictionary<string, string> streamingBySession = new();
+    private Dictionary<string, string> activityBySession = new();
 
     protected override void OnInitialized()
     {
         CopilotService.OnStateChanged += RefreshState;
         CopilotService.OnSessionComplete += HandleComplete;
+        CopilotService.OnContentReceived += HandleContent;
+        CopilotService.OnActivity += HandleActivity;
         RefreshState();
     }
 
@@ -114,6 +125,11 @@
                 });
             ");
         }
+
+        // Auto-scroll all card message containers to bottom
+        await JS.InvokeVoidAsync("eval", @"
+            document.querySelectorAll('.card-messages').forEach(el => el.scrollTop = el.scrollHeight);
+        ");
     }
 
     private void RefreshState()
@@ -125,12 +141,28 @@
     private void HandleComplete(string sessionName, string summary)
     {
         completedSessions.Add(sessionName);
+        streamingBySession.Remove(sessionName);
+        activityBySession.Remove(sessionName);
         InvokeAsync(StateHasChanged);
         _ = Task.Delay(10000).ContinueWith(_ =>
         {
             completedSessions.Remove(sessionName);
             InvokeAsync(StateHasChanged);
         });
+    }
+
+    private void HandleContent(string sessionName, string content)
+    {
+        if (!streamingBySession.ContainsKey(sessionName))
+            streamingBySession[sessionName] = "";
+        streamingBySession[sessionName] += content;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleActivity(string sessionName, string activity)
+    {
+        activityBySession[sessionName] = activity;
+        InvokeAsync(StateHasChanged);
     }
 
     private async Task SendFromCard(string sessionName)
@@ -140,6 +172,8 @@
         if (string.IsNullOrWhiteSpace(prompt)) return;
 
         await JS.InvokeVoidAsync("eval", $"document.getElementById('{inputId}').value = ''");
+        streamingBySession.Remove(sessionName);
+        activityBySession.Remove(sessionName);
 
         try
         {
@@ -187,5 +221,7 @@
     {
         CopilotService.OnStateChanged -= RefreshState;
         CopilotService.OnSessionComplete -= HandleComplete;
+        CopilotService.OnContentReceived -= HandleContent;
+        CopilotService.OnActivity -= HandleActivity;
     }
 }

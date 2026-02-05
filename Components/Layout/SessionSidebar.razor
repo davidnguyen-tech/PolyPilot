@@ -179,6 +179,10 @@
     private void RefreshSessions()
     {
         sessions = CopilotService.GetAllSessions().ToList();
+        if (showPersistedSessions)
+        {
+            LoadPersistedSessions();
+        }
         InvokeAsync(StateHasChanged);
     }
 

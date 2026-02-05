@@ -5,7 +5,7 @@
 **IMPORTANT**: After making ANY code changes to this project, you MUST rebuild and relaunch the app using the relaunch script:
 
 ```bash
-/Users/shneuvil/Projects/AutoPilot.App/relaunch.sh
+./relaunch.sh
 ```
 
 **NEVER** use `dotnet build` + `open` separately. The relaunch script:

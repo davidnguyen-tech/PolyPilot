@@ -25,7 +25,23 @@ public class CopilotService : IAsyncDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".copilot", "autopilot-ui-state.json");
 
-    private static readonly string ProjectDir = "/Users/shneuvil/Projects/AutoPilot.App";
+    private static readonly string ProjectDir = FindProjectDir();
+
+    private static string FindProjectDir()
+    {
+        // Walk up from the base directory to find the .csproj (works from bin/Debug/... at runtime)
+        var dir = AppDomain.CurrentDomain.BaseDirectory;
+        for (int i = 0; i < 10; i++)
+        {
+            if (Directory.GetFiles(dir, "*.csproj").Length > 0)
+                return dir;
+            var parent = Directory.GetParent(dir);
+            if (parent == null) break;
+            dir = parent.FullName;
+        }
+        // Fallback to user home
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
 
     public string DefaultModel { get; set; } = "claude-opus-4.6";
     public string? SystemInstructions { get; set; }
@@ -120,10 +136,18 @@ public class CopilotService : IAsyncDisposable
                     // Get working directory from session.start
                     if (type == "session.start" && workingDir == null)
                     {
-                        if (root.TryGetProperty("data", out var data) &&
-                            data.TryGetProperty("workingDirectory", out var wd))
+                        if (root.TryGetProperty("data", out var data))
                         {
-                            workingDir = wd.GetString();
+                            // Try data.context.cwd first (newer format), then data.workingDirectory
+                            if (data.TryGetProperty("context", out var ctx) &&
+                                ctx.TryGetProperty("cwd", out var cwd))
+                            {
+                                workingDir = cwd.GetString();
+                            }
+                            else if (data.TryGetProperty("workingDirectory", out var wd))
+                            {
+                                workingDir = wd.GetString();
+                            }
                         }
                     }
                     
@@ -207,8 +231,7 @@ public class CopilotService : IAsyncDisposable
                         history.Add(new ChatMessage("user", lastUserMessage, lastUserTimestamp));
                         if (assistantResponses.Count > 0)
                         {
-                            // Join all assistant responses for this turn
-                            var fullResponse = string.Join("\n\n", assistantResponses.Where(r => r.Length > 50));
+                            var fullResponse = string.Join("\n\n", assistantResponses);
                             if (!string.IsNullOrEmpty(fullResponse))
                                 history.Add(new ChatMessage("assistant", fullResponse, lastAssistantTimestamp));
                             assistantResponses.Clear();
@@ -232,8 +255,7 @@ public class CopilotService : IAsyncDisposable
                     if (data.TryGetProperty("content", out var assistantContent))
                     {
                         var content = assistantContent.GetString();
-                        // Only capture substantial content without tool requests
-                        if (!string.IsNullOrEmpty(content) && content.Length > 20 && !hasToolRequests)
+                        if (!string.IsNullOrEmpty(content) && !hasToolRequests)
                         {
                             assistantResponses.Add(content);
                             lastAssistantTimestamp = timestamp;
@@ -248,7 +270,7 @@ public class CopilotService : IAsyncDisposable
                 history.Add(new ChatMessage("user", lastUserMessage, lastUserTimestamp));
                 if (assistantResponses.Count > 0)
                 {
-                    var fullResponse = string.Join("\n\n", assistantResponses.Where(r => r.Length > 50));
+                    var fullResponse = string.Join("\n\n", assistantResponses);
                     if (!string.IsNullOrEmpty(fullResponse))
                         history.Add(new ChatMessage("assistant", fullResponse, lastAssistantTimestamp));
                 }
@@ -330,21 +352,34 @@ public class CopilotService : IAsyncDisposable
             throw new InvalidOperationException($"Session '{name}' already exists.");
 
         var sessionModel = model ?? DefaultModel;
+
+        // Build system message with critical relaunch instructions
+        var systemContent = new StringBuilder();
+        systemContent.AppendLine($@"
+CRITICAL BUILD INSTRUCTION: You are running inside the AutoPilot.App MAUI application.
+When you make ANY code changes to files in {ProjectDir}, you MUST rebuild and relaunch by running:
+
+    bash {Path.Combine(ProjectDir, "relaunch.sh")}
+
+This script builds the app, launches a new instance, waits for it to start, then kills the old one.
+NEVER use 'dotnet build' + 'open' separately. NEVER skip the relaunch after code changes.
+ALWAYS run the relaunch script as the final step after making changes to this project.
+");
+        if (!string.IsNullOrEmpty(SystemInstructions))
+        {
+            systemContent.AppendLine(SystemInstructions);
+        }
+
         var config = new SessionConfig
         {
             Model = sessionModel,
             WorkingDirectory = ProjectDir,
-        };
-
-        // Inject system instructions if set
-        if (!string.IsNullOrEmpty(SystemInstructions))
-        {
-            config.SystemMessage = new SystemMessageConfig
+            SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = SystemInstructions
-            };
-        }
+                Content = systemContent.ToString()
+            }
+        };
 
         var copilotSession = await _client.CreateSessionAsync(config, cancellationToken);
 
@@ -352,8 +387,11 @@ public class CopilotService : IAsyncDisposable
         {
             Name = name,
             Model = sessionModel,
-            CreatedAt = DateTime.Now
+            CreatedAt = DateTime.Now,
+            SessionId = copilotSession.SessionId
         };
+
+        Debug($"Session '{name}' created with ID: {copilotSession.SessionId}");
 
         var state = new SessionState
         {
@@ -370,6 +408,7 @@ public class CopilotService : IAsyncDisposable
         }
 
         _activeSessionName ??= name;
+        SaveActiveSessionsToDisk();
         OnStateChanged?.Invoke();
         return info;
     }
