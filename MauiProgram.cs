@@ -35,6 +35,7 @@ public static class MauiProgram
 		
 		// Register CopilotService as singleton so state is shared across components
 		builder.Services.AddSingleton<CopilotService>();
+		builder.Services.AddSingleton<ChatDatabase>();
 		builder.Services.AddSingleton<ServerManager>();
 
 #if DEBUG

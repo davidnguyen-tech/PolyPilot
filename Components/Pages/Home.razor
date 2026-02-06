@@ -34,7 +34,7 @@
             <span class="model-badge">@activeSession.Model</span>
             @if (activeSession.SessionId != null)
             {
-                <span class="session-id-badge" title="@activeSession.SessionId"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> @activeSession.SessionId[..8]</span>
+                <span class="session-id-badge" title="Click to copy: @activeSession.SessionId" @onclick="() => CopySessionId(activeSession.SessionId)"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> @activeSession.SessionId[..8] <svg class="icon copy-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
             }
             @if (activeSession.IsProcessing)
             {
@@ -51,7 +51,15 @@
             }
             else
             {
-                @foreach (var msg in activeSession.History.ToList())
+                @if (HasMoreMessages)
+                {
+                    <button class="load-more-btn" @onclick="LoadMoreMessages">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+                        Load @Math.Min(50, activeSession.History.Count - visibleMessageCount) older messages (@(activeSession.History.Count - visibleMessageCount) remaining)
+                    </button>
+                }
+
+                @foreach (var msg in VisibleHistory)
                 {
                     @switch (msg.MessageType)
                     {
@@ -73,6 +81,89 @@
                                     <div class="message-time">@msg.Timestamp.ToString("HH:mm")</div>
                                 </div>
                             </div>
+                            break;
+
+                        case ChatMessageType.Reasoning:
+                            <div class="reasoning-block @(msg.IsCollapsed && LineCount(msg.Content) > 5 ? "collapsed" : "")">
+                                <button class="reasoning-header" @onclick="() => msg.IsCollapsed = !msg.IsCollapsed">
+                                    <span class="reasoning-title"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z"/><line x1="10" y1="22" x2="14" y2="22"/></svg> @(msg.IsComplete ? "Thought" : "Thinking...")</span>
+                                    @if (LineCount(msg.Content) > 5)
+                                    {
+                                        <span class="collapse-icon">@(msg.IsCollapsed ? "▶" : "▼")</span>
+                                    }
+                                </button>
+                                @if (!msg.IsCollapsed || LineCount(msg.Content) <= 5)
+                                {
+                                    <div class="reasoning-content">@msg.Content</div>
+                                }
+                                else
+                                {
+                                    <div class="reasoning-content preview">@FirstLines(msg.Content, 3)</div>
+                                }
+                            </div>
+                            break;
+
+                        case ChatMessageType.ToolCall:
+                            @if (msg.ToolName == "task_complete")
+                            {
+                                <div class="task-complete-card">
+                                    <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                    <span class="task-complete-text">@(string.IsNullOrEmpty(msg.Content) || IsUnusableResult(msg.Content) ? "Task complete" : msg.Content)</span>
+                                </div>
+                            }
+                            else
+                            {
+                            <div class="tool-card @(msg.IsComplete ? (msg.IsSuccess ? "success" : "error") : "running")">
+                                <div class="tool-header">
+                                    <span class="tool-info"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> @FormatToolName(msg.ToolName ?? "")</span>
+                                    <span class="tool-status">
+                                        @if (!msg.IsComplete)
+                                        {
+                                            <svg class="icon spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg> <text>Running</text>
+                                        }
+                                        else if (msg.IsSuccess)
+                                        {
+                                            <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <text>Done</text>
+                                        }
+                                        else
+                                        {
+                                            <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> <text>Failed</text>
+                                        }
+                                    </span>
+                                </div>
+                                @if (msg.IsComplete && !string.IsNullOrEmpty(msg.Content) && !IsUnusableResult(msg.Content))
+                                {
+                                    @if (GetImagePath(msg.Content) is string imgPath && FileToDataUri(imgPath) is string dataUri)
+                                    {
+                                        <div class="tool-result-section tool-image-result">
+                                            <img src="@dataUri" alt="@System.IO.Path.GetFileName(imgPath)" />
+                                        </div>
+                                    }
+                                    else if (LineCount(msg.Content) <= 5)
+                                    {
+                                        <div class="tool-result-section">
+                                            <pre class="tool-result-content">@TruncateResult(msg.Content)</pre>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="tool-result-section">
+                                            <button class="tool-result-toggle" @onclick="() => msg.IsCollapsed = !msg.IsCollapsed">
+                                                @(msg.IsCollapsed ? "Show Full Result ▶" : "Collapse ▼")
+                                            </button>
+                                            @if (!msg.IsCollapsed)
+                                            {
+                                                <pre class="tool-result-content">@TruncateResult(msg.Content)</pre>
+                                            }
+                                            else
+                                            {
+                                                <pre class="tool-result-content preview">@FirstLines(msg.Content, 3)</pre>
+                                            }
+                                        </div>
+                                    }
+                                }
+                            </div>
+                            }
                             break;
 
                         case ChatMessageType.Error:
@@ -157,14 +248,15 @@
                     </button>
                 }
                 <button @onclick="SendMessage" 
-                        disabled="@(string.IsNullOrWhiteSpace(userInput))">
+                        disabled="@(string.IsNullOrWhiteSpace(userInput))"
+                        title="@(activeSession.IsProcessing ? "Queue message" : "Send message")">
                     @if (activeSession.IsProcessing)
                     {
-                        <text>Queue</text>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                     }
                     else
                     {
-                        <text>Send</text>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                     }
                 </button>
             </div>
@@ -190,15 +282,28 @@
                 }
                 <span class="status-sep">·</span>
                 <span class="status-msgs">@activeSession.History.Count msgs</span>
+                <span class="status-sep">·</span>
+                <button class="plan-icon-toggle @(showDebugPanel ? "active" : "")" @onclick="() => showDebugPanel = !showDebugPanel" title="Toggle debug log">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.88 1.88"/><path d="M14.12 3.88L16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>
+                    <span>Log</span>
+                </button>
             </div>
         </div>
     }
     
-    @if (!string.IsNullOrEmpty(debugLog))
+    @if (showDebugPanel)
     {
         <div class="debug-panel">
-            <div class="debug-header">Debug Log <button @onclick="() => debugLog = string.Empty">Clear</button></div>
-            <pre>@debugLog</pre>
+            <div class="debug-header">
+                <span>Debug Log</span>
+                <div class="debug-actions">
+                    <input type="text" class="debug-filter" placeholder="Filter..." @bind="debugFilter" @bind:event="oninput" />
+                    <button @onclick="InspectDom" title="Inspect DOM">🔍</button>
+                    <button @onclick="() => debugLog = string.Empty" title="Clear log">Clear</button>
+                    <button @onclick="() => showDebugPanel = false" title="Close">✕</button>
+                </div>
+            </div>
+            <pre>@FilteredDebugLog</pre>
         </div>
     }
 </div>
@@ -217,11 +322,36 @@
     private string? initError;
     private string? lastError;
     private string debugLog = "";
+    private string debugFilter = "";
+    private bool showDebugPanel = false;
     private ElementReference messagesContainer;
     private ElementReference textareaRef;
     private bool _needsRedirect;
     private string? _redirectTo;
     private bool _needsScroll = true;
+    private bool shouldPreventDefault;
+    private int visibleMessageCount = 50;
+    private static readonly Dictionary<string, string> _imageCache = new();
+    private static readonly Dictionary<int, string> _markdownCache = new();
+
+    private List<ChatMessage> VisibleHistory
+    {
+        get
+        {
+            if (activeSession == null) return new();
+            var all = activeSession.History;
+            if (all.Count <= visibleMessageCount) return all.ToList();
+            return all.Skip(all.Count - visibleMessageCount).ToList();
+        }
+    }
+
+    private bool HasMoreMessages => activeSession != null && activeSession.History.Count > visibleMessageCount;
+
+    private void LoadMoreMessages()
+    {
+        visibleMessageCount += 50;
+        StateHasChanged();
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -339,9 +469,14 @@
     private void HandleDebug(string message)
     {
         debugLog = $"{DateTime.Now:HH:mm:ss} {message}\n{debugLog}";
-        if (debugLog.Length > 2000) debugLog = debugLog[..2000];
-        InvokeAsync(StateHasChanged);
+        if (debugLog.Length > 10000) debugLog = debugLog[..10000];
+        if (showDebugPanel) InvokeAsync(StateHasChanged);
     }
+
+    private string FilteredDebugLog =>
+        string.IsNullOrWhiteSpace(debugFilter) ? debugLog :
+        string.Join("\n", debugLog.Split('\n')
+            .Where(l => l.Contains(debugFilter, StringComparison.OrdinalIgnoreCase)));
 
     private async Task Initialize()
     {
@@ -385,9 +520,7 @@
         if (activeSession?.Name != prev)
         {
             _needsScroll = true;
-            // Clean up any stale tool/reasoning entries from history
-            activeSession?.History.RemoveAll(m =>
-                m.MessageType is ChatMessageType.ToolCall or ChatMessageType.Reasoning);
+            visibleMessageCount = 50; // Reset window when switching sessions
         }
         InvokeAsync(async () =>
         {
@@ -427,6 +560,8 @@
         if (e.Key == "Enter" && !e.ShiftKey)
         {
             await SendMessage();
+            // Force-clear via JS to remove any residual newline
+            await JS.InvokeVoidAsync("eval", "document.querySelector('.input-row textarea').value = ''");
         }
     }
 
@@ -480,11 +615,23 @@
         if (activeSession != null) CopilotService.ClearQueue(activeSession.Name);
     }
 
+    private async Task CopySessionId(string sessionId)
+    {
+        await JS.InvokeVoidAsync("eval", $"navigator.clipboard.writeText('{sessionId}')");
+    }
+
+    private async Task InspectDom()
+    {
+        var result = await JS.InvokeAsync<string>("inspectMessages");
+        debugLog += $"\n[DOM Inspect]\n{result}\n";
+        StateHasChanged();
+    }
+
     private string GetInputPlaceholder()
     {
         if (isPlanMode) return "Plan mode: describe what you want planned...";
-        if (activeSession?.IsProcessing == true) return "Type to queue next message... (sent when idle)";
-        return "Type a message... (Enter to send, Shift+Enter for new line)";
+        if (activeSession?.IsProcessing == true) return "Type to queue next message...";
+        return "Message... (⏎ send, ⇧⏎ newline)";
     }
 
     private string Truncate(string text, int maxLen)
@@ -493,10 +640,35 @@
         return text.Length > maxLen ? text[..maxLen] + "…" : text;
     }
 
+    private static readonly System.Text.RegularExpressions.Regex ImagePathRegex = new(
+        @"(?<!\(|""|\w)((?:/[\w\-. ]+)+\.(?:png|jpg|jpeg|gif|webp|svg|bmp|tiff))(?!\)|""|\w)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static string RenderMarkdown(string content)
     {
         if (string.IsNullOrEmpty(content)) return "";
-        try { return Markdig.Markdown.ToHtml(content, MdPipeline); }
+
+        var key = content.GetHashCode();
+        if (_markdownCache.TryGetValue(key, out var cached)) return cached;
+
+        try
+        {
+            var html = Markdig.Markdown.ToHtml(content, MdPipeline);
+            html = ImagePathRegex.Replace(html, match =>
+            {
+                var path = match.Value;
+                var dataUri = FileToDataUri(path);
+                if (dataUri != null)
+                    return $"<img src=\"{dataUri}\" alt=\"{System.IO.Path.GetFileName(path)}\" />";
+                return match.Value;
+            });
+
+            // Only cache completed (non-streaming) content — limit cache size
+            if (_markdownCache.Count < 500)
+                _markdownCache[key] = html;
+
+            return html;
+        }
         catch { return System.Net.WebUtility.HtmlEncode(content).Replace("\n", "<br/>"); }
     }
 
@@ -547,6 +719,52 @@
         if (content.StartsWith("GitHub.Copilot.SDK.")) return true;
         if (content is "(no result)" or "Intent logged") return true;
         return false;
+    }
+
+    private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tiff" };
+
+    private static string? GetImagePath(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+        var trimmed = content.Trim();
+        foreach (var ext in ImageExtensions)
+        {
+            var idx = trimmed.LastIndexOf(ext, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+            var endIdx = idx + ext.Length;
+            var pathStart = trimmed.LastIndexOf(' ', idx) + 1;
+            if (pathStart < 0) pathStart = 0;
+            var path = trimmed[pathStart..endIdx];
+            if (path.StartsWith('/') && System.IO.File.Exists(path))
+                return path;
+        }
+        return null;
+    }
+
+    private static string? FileToDataUri(string path)
+    {
+        if (_imageCache.TryGetValue(path, out var cached)) return cached;
+        try
+        {
+            if (!System.IO.File.Exists(path)) return null;
+            var bytes = System.IO.File.ReadAllBytes(path);
+            var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+            var mime = ext switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                ".bmp" => "image/bmp",
+                ".tiff" or ".tif" => "image/tiff",
+                _ => "application/octet-stream"
+            };
+            var dataUri = $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
+            _imageCache[path] = dataUri;
+            return dataUri;
+        }
+        catch { return null; }
     }
 
     private static string FormatTokenCount(int count) =>

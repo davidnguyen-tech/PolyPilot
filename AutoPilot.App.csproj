@@ -72,6 +72,8 @@
         <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
         <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="$(MauiVersion)" />
         <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.0" />
+        <PackageReference Include="sqlite-net-pcl" Version="*" />
+        <PackageReference Include="SQLitePCLRaw.bundle_green" Version="*" />
     </ItemGroup>
 
     <!-- Prevent linker from trimming SDK event types needed for pattern matching -->
