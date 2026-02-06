@@ -9,6 +9,7 @@ namespace AutoPilot.App.Services;
 public class CopilotService : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, SessionState> _sessions = new();
+    private readonly ChatDatabase _chatDb;
     private CopilotClient? _client;
     private string? _activeSessionName;
     private SynchronizationContext? _syncContext;
@@ -47,6 +48,12 @@ public class CopilotService : IAsyncDisposable
     public string? SystemInstructions { get; set; }
     public bool IsInitialized { get; private set; }
     public string? ActiveSessionName => _activeSessionName;
+    public ChatDatabase ChatDb => _chatDb;
+
+    public CopilotService(ChatDatabase chatDb)
+    {
+        _chatDb = chatDb;
+    }
 
     // Debug info
     public string LastDebugMessage { get; private set; } = "";
@@ -213,10 +220,8 @@ public class CopilotService : IAsyncDisposable
 
         try
         {
-            string? lastUserMessage = null;
-            DateTime lastUserTimestamp = DateTime.Now;
-            var assistantResponses = new List<string>();
-            DateTime lastAssistantTimestamp = DateTime.Now;
+            // Track tool calls by ID so we can update them when complete
+            var toolCallMessages = new Dictionary<string, ChatMessage>();
 
             foreach (var line in File.ReadLines(eventsFile))
             {
@@ -233,56 +238,90 @@ public class CopilotService : IAsyncDisposable
                 if (root.TryGetProperty("timestamp", out var tsEl))
                     DateTime.TryParse(tsEl.GetString(), out timestamp);
 
-                if (type == "user.message")
+                switch (type)
                 {
-                    // Before processing new user message, flush any pending assistant responses
-                    if (lastUserMessage != null)
+                    case "user.message":
                     {
-                        history.Add(new ChatMessage("user", lastUserMessage, lastUserTimestamp));
-                        if (assistantResponses.Count > 0)
+                        if (data.TryGetProperty("content", out var userContent))
                         {
-                            var fullResponse = string.Join("\n\n", assistantResponses);
-                            if (!string.IsNullOrEmpty(fullResponse))
-                                history.Add(new ChatMessage("assistant", fullResponse, lastAssistantTimestamp));
-                            assistantResponses.Clear();
+                            var content = userContent.GetString();
+                            if (!string.IsNullOrEmpty(content))
+                            {
+                                var msg = ChatMessage.UserMessage(content);
+                                msg.Timestamp = timestamp;
+                                history.Add(msg);
+                            }
                         }
+                        break;
                     }
-                    
-                    // Start tracking new user message
-                    if (data.TryGetProperty("content", out var userContent))
+
+                    case "assistant.message":
                     {
-                        lastUserMessage = userContent.GetString();
-                        lastUserTimestamp = timestamp;
-                    }
-                }
-                else if (type == "assistant.message")
-                {
-                    // Check if this message has tool requests (skip those, they're just "thinking")
-                    bool hasToolRequests = data.TryGetProperty("toolRequests", out var tools) && 
-                                           tools.ValueKind == JsonValueKind.Array && 
-                                           tools.GetArrayLength() > 0;
-                    
-                    if (data.TryGetProperty("content", out var assistantContent))
-                    {
-                        var content = assistantContent.GetString();
-                        if (!string.IsNullOrEmpty(content) && !hasToolRequests)
+                        // Add reasoning if present
+                        if (data.TryGetProperty("reasoningText", out var reasoningEl))
                         {
-                            assistantResponses.Add(content);
-                            lastAssistantTimestamp = timestamp;
+                            var reasoning = reasoningEl.GetString();
+                            if (!string.IsNullOrEmpty(reasoning))
+                            {
+                                var msg = ChatMessage.ReasoningMessage("restored");
+                                msg.Content = reasoning;
+                                msg.IsComplete = true;
+                                msg.IsCollapsed = true;
+                                msg.Timestamp = timestamp;
+                                history.Add(msg);
+                            }
                         }
+
+                        // Add assistant text content (skip if only tool requests with no text)
+                        if (data.TryGetProperty("content", out var assistantContent))
+                        {
+                            var content = assistantContent.GetString()?.Trim();
+                            if (!string.IsNullOrEmpty(content))
+                            {
+                                var msg = ChatMessage.AssistantMessage(content);
+                                msg.Timestamp = timestamp;
+                                history.Add(msg);
+                            }
+                        }
+                        break;
                     }
-                }
-            }
-            
-            // Flush final turn
-            if (lastUserMessage != null)
-            {
-                history.Add(new ChatMessage("user", lastUserMessage, lastUserTimestamp));
-                if (assistantResponses.Count > 0)
-                {
-                    var fullResponse = string.Join("\n\n", assistantResponses);
-                    if (!string.IsNullOrEmpty(fullResponse))
-                        history.Add(new ChatMessage("assistant", fullResponse, lastAssistantTimestamp));
+
+                    case "tool.execution_start":
+                    {
+                        var toolName = data.TryGetProperty("toolName", out var tn) ? tn.GetString() ?? "" : "";
+                        var toolCallId = data.TryGetProperty("toolCallId", out var tc) ? tc.GetString() : null;
+                        
+                        // Skip report_intent — it's noise in history
+                        if (toolName == "report_intent") break;
+
+                        var msg = ChatMessage.ToolCallMessage(toolName, toolCallId);
+                        msg.Timestamp = timestamp;
+                        history.Add(msg);
+                        if (toolCallId != null)
+                            toolCallMessages[toolCallId] = msg;
+                        break;
+                    }
+
+                    case "tool.execution_complete":
+                    {
+                        var toolCallId = data.TryGetProperty("toolCallId", out var tc) ? tc.GetString() : null;
+                        if (toolCallId != null && toolCallMessages.TryGetValue(toolCallId, out var msg))
+                        {
+                            msg.IsComplete = true;
+                            msg.IsSuccess = data.TryGetProperty("success", out var s) && s.GetBoolean();
+                            msg.IsCollapsed = true;
+
+                            if (data.TryGetProperty("result", out var result))
+                            {
+                                // Prefer detailedContent, fall back to content
+                                var content = result.TryGetProperty("detailedContent", out var dc) ? dc.GetString() : null;
+                                if (string.IsNullOrEmpty(content) && result.TryGetProperty("content", out var c))
+                                    content = c.GetString();
+                                msg.Content = content ?? "";
+                            }
+                        }
+                        break;
+                    }
                 }
             }
         }
@@ -308,8 +347,21 @@ public class CopilotService : IAsyncDisposable
         if (_sessions.ContainsKey(displayName))
             throw new InvalidOperationException($"Session '{displayName}' already exists.");
 
-        // Load history from disk before resuming
-        var history = LoadHistoryFromDisk(sessionId);
+        // Load history: try DB first, fall back to parsing events.jsonl
+        List<ChatMessage> history;
+        if (await _chatDb.HasMessagesAsync(sessionId))
+        {
+            history = await _chatDb.GetAllMessagesAsync(sessionId);
+        }
+        else
+        {
+            history = LoadHistoryFromDisk(sessionId);
+            if (history.Count > 0)
+            {
+                // Persist to DB for future fast loading
+                await _chatDb.BulkInsertAsync(sessionId, history);
+            }
+        }
 
         // Resume the session using the SDK
         var copilotSession = await _client.ResumeSessionAsync(sessionId, cancellationToken: cancellationToken);
@@ -492,6 +544,26 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                 var resultStr = FormatToolResult(toolDone.Data.Result);
                 var hasError = toolDone.Data.Error != null;
 
+                // Log raw result type for debugging
+                var rawResult = toolDone.Data.Result;
+                if (rawResult != null)
+                {
+                    var resultType = rawResult.GetType();
+                    Invoke(() => OnDebug?.Invoke($"[ToolResult] {completeToolName} callId={completeCallId} type={resultType.FullName}"));
+                    // Log all properties
+                    foreach (var prop in resultType.GetProperties())
+                    {
+                        try
+                        {
+                            var val = prop.GetValue(rawResult);
+                            var valStr = val?.ToString() ?? "null";
+                            if (valStr.Length > 200) valStr = valStr[..200] + "...";
+                            Invoke(() => OnDebug?.Invoke($"  .{prop.Name} = {valStr}"));
+                        }
+                        catch { }
+                    }
+                }
+
                 // Skip filtered tools
                 if (completeToolName != null && FilteredTools.Contains(completeToolName))
                     break;
@@ -584,7 +656,8 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         try
         {
             var resultType = result.GetType();
-            foreach (var propName in new[] { "Content", "content", "Message", "message", "Text", "text", "Value", "value" })
+            // Prefer DetailedContent (has richer info like file paths) over Content
+            foreach (var propName in new[] { "DetailedContent", "detailedContent", "Content", "content", "Message", "message", "Text", "text", "Value", "value" })
             {
                 var prop = resultType.GetProperty(propName);
                 if (prop != null)
@@ -605,8 +678,13 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         var response = state.CurrentResponse.ToString();
         if (!string.IsNullOrEmpty(response))
         {
-            state.Info.History.Add(new ChatMessage("assistant", response, DateTime.Now));
+            var msg = new ChatMessage("assistant", response, DateTime.Now);
+            state.Info.History.Add(msg);
             state.Info.MessageCount = state.Info.History.Count;
+
+            // Write-through to DB
+            if (!string.IsNullOrEmpty(state.Info.SessionId))
+                _ = _chatDb.AddMessageAsync(state.Info.SessionId, msg);
         }
         state.ResponseCompletion?.TrySetResult(response);
         state.CurrentResponse.Clear();
@@ -654,6 +732,10 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         state.Info.History.Add(new ChatMessage("user", prompt, DateTime.Now));
         state.Info.MessageCount = state.Info.History.Count;
         OnStateChanged?.Invoke();
+
+        // Write-through to DB
+        if (!string.IsNullOrEmpty(state.Info.SessionId))
+            _ = _chatDb.AddMessageAsync(state.Info.SessionId, state.Info.History.Last());
 
         Console.WriteLine($"[DEBUG] Sending prompt to session '{sessionName}': {prompt.Substring(0, Math.Min(50, prompt.Length))}...");
         

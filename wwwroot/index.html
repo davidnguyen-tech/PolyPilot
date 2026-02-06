@@ -50,6 +50,30 @@
             return (element.scrollHeight - element.scrollTop - element.clientHeight) < 150;
         };
 
+        window.inspectMessages = function() {
+            var msgs = document.querySelector('.messages');
+            if (!msgs) return 'No .messages element';
+            var children = msgs.children;
+            var result = 'Container: w=' + msgs.clientWidth + ' h=' + msgs.clientHeight + ' scrollW=' + msgs.scrollWidth + ', display=' + getComputedStyle(msgs).display + ', flexDir=' + getComputedStyle(msgs).flexDirection + ', alignItems=' + getComputedStyle(msgs).alignItems + '\n';
+            for (var i = 0; i < Math.min(children.length, 30); i++) {
+                var c = children[i];
+                var cs = getComputedStyle(c);
+                result += i + ': <' + c.tagName + '> class="' + c.className.substring(0, 50) + '" w=' + c.clientWidth + '/' + c.offsetWidth + ' h=' + c.clientHeight + '/' + c.offsetHeight + ' display=' + cs.display + ' maxW=' + cs.maxWidth + ' width=' + cs.width + ' alignSelf=' + cs.alignSelf + ' overflow=' + cs.overflow + '\n';
+            }
+            var toolCards = document.querySelectorAll('.tool-card');
+            if (toolCards.length > 0) {
+                result += '\n=== TOOL CARDS ===\n';
+                toolCards.forEach(function(tc, i) {
+                    var tcs = getComputedStyle(tc);
+                    var parent = tc.parentElement;
+                    var ps = parent ? getComputedStyle(parent) : null;
+                    result += 'TC' + i + ': w=' + tc.clientWidth + '/' + tc.offsetWidth + ' h=' + tc.clientHeight + '/' + tc.offsetHeight + ' display=' + tcs.display + ' width=' + tcs.width + ' minW=' + tcs.minWidth + ' overflow=' + tcs.overflow + '\n';
+                    if (parent) result += '  parent: <' + parent.tagName + '> class="' + parent.className.substring(0, 40) + '" w=' + parent.clientWidth + ' display=' + ps.display + ' width=' + ps.width + '\n';
+                });
+            }
+            return result;
+        };
+
         window.showNotification = function(sessionName, summary) {
             // Play a sound
             try {

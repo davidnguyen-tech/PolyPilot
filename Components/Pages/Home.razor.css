@@ -93,11 +93,32 @@
     color: rgba(255,255,255,0.5);
 }
 
+.load-more-btn {
+    align-self: center;
+    padding: 0.4rem 1rem;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    color: rgba(255,255,255,0.6);
+    font-size: 0.8rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.load-more-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.85);
+}
+
 /* === Messages === */
 .message {
     display: flex;
     gap: 0.75rem;
     max-width: 85%;
+    flex-shrink: 0;
 }
 
 .message.user {
@@ -123,6 +144,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    min-width: 0;
+    flex: 1;
 }
 
 .message-text {
@@ -224,12 +247,32 @@
     font-weight: 600;
 }
 
+::deep .markdown-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+    display: block;
+}
+
+::deep .markdown-body p > img:only-child {
+    margin: 0;
+}
+
+::deep .markdown-body video {
+    max-width: 100%;
+    border-radius: 8px;
+    margin: 0.5rem 0;
+}
+
 /* === Reasoning blocks === */
 .reasoning-block {
     background: rgba(139, 92, 246, 0.08);
     border: 1px solid rgba(139, 92, 246, 0.25);
     border-radius: 8px;
-    max-width: 90%;
+    min-width: 0;
+    align-self: stretch;
+    flex-shrink: 0;
     overflow: hidden;
 }
 
@@ -284,7 +327,9 @@
 .tool-card {
     border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.15);
-    max-width: 90%;
+    min-width: 0;
+    align-self: stretch;
+    flex-shrink: 0;
     overflow: hidden;
     background: rgba(255,255,255,0.04);
 }
@@ -334,8 +379,10 @@
     color: rgba(255,255,255,0.6);
     white-space: pre-wrap;
     word-break: break-word;
+    overflow-wrap: break-word;
     max-height: 200px;
     overflow-y: auto;
+    overflow-x: hidden;
     font-family: 'SF Mono', Monaco, Consolas, monospace;
 }
 
@@ -344,6 +391,18 @@
     overflow: hidden;
     mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+}
+
+.tool-image-result {
+    padding: 0.5rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.tool-image-result img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    display: block;
 }
 
 /* === Task complete card === */
@@ -355,8 +414,10 @@
     background: rgba(34, 197, 94, 0.08);
     border: 1px solid rgba(34, 197, 94, 0.25);
     border-radius: 6px;
-    max-width: 90%;
     font-size: 0.85rem;
+    min-width: 0;
+    align-self: stretch;
+    flex-shrink: 0;
 }
 
 .task-complete-text {
@@ -373,8 +434,10 @@
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.3);
     border-radius: 8px;
-    max-width: 90%;
     font-size: 0.9rem;
+    min-width: 0;
+    align-self: stretch;
+    flex-shrink: 0;
 }
 
 .error-icon { flex-shrink: 0; }
@@ -519,10 +582,9 @@
 .debug-panel {
     position: fixed;
     bottom: 80px;
+    left: 10px;
     right: 10px;
-    width: 450px;
-    max-width: calc(100vw - 20px);
-    max-height: 250px;
+    max-height: 300px;
     background: rgba(0,0,0,0.92);
     border: 1px solid #333;
     border-radius: 8px;
@@ -682,18 +744,17 @@
     ::deep .markdown-body pre { padding: 0.5rem; font-size: 0.75rem; }
     ::deep .markdown-body code { font-size: 0.8em; padding: 0.1em 0.25em; }
 
-    .reasoning-block { max-width: 95%; }
     .reasoning-header { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
     .reasoning-content { padding: 0.4rem 0.6rem; font-size: 0.8rem; }
 
-    .tool-card { max-width: 95%; }
+    .tool-card { min-width: 200px; }
     .tool-header { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
     .tool-status { font-size: 0.7rem; }
     .tool-result-content { padding: 0.4rem 0.6rem; font-size: 0.7rem; }
     .tool-result-toggle { padding: 0.25rem 0.6rem; font-size: 0.65rem; }
 
-    .task-complete-card { font-size: 0.75rem; padding: 0.25rem 0.5rem; max-width: 95%; }
-    .error-card { font-size: 0.8rem; padding: 0.4rem 0.6rem; max-width: 95%; }
+    .task-complete-card { font-size: 0.75rem; padding: 0.25rem 0.5rem; }
+    .error-card { font-size: 0.8rem; padding: 0.4rem 0.6rem; }
     .intent-pill { font-size: 0.7rem; padding: 0.2rem 0.5rem; }
 
     .input-area { padding: 0.4rem 0.5rem 0.75rem; gap: 0.3rem; }

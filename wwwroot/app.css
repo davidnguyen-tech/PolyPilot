@@ -127,3 +127,20 @@ h1:focus {
 .toast-notification strong {
     color: #48bb78;
 }
+
+@media (max-width: 640px) {
+    .toast-notification {
+        top: 10px;
+        bottom: auto;
+        right: 10px;
+        left: 10px;
+        max-width: none;
+        padding: 10px 14px;
+        font-size: 0.8rem;
+        border-radius: 8px;
+        transform: translateY(-20px);
+    }
+    .toast-notification.show {
+        transform: translateY(0);
+    }
+}

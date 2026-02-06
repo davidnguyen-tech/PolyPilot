@@ -51,7 +51,15 @@
             }
             else
             {
-                @foreach (var message in activeSession.History.ToList())
+                @if (HasMoreMessages)
+                {
+                    <button class="load-more-btn" @onclick="LoadMoreMessages">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+                        Load @Math.Min(50, activeSession.History.Count - visibleMessageCount) older messages (@(activeSession.History.Count - visibleMessageCount) remaining)
+                    </button>
+                }
+
+                @foreach (var message in VisibleHistory)
                 {
                     @switch (message.MessageType)
                     {
@@ -125,7 +133,13 @@
                                 </div>
                                 @if (message.IsComplete && !string.IsNullOrEmpty(message.Content) && !IsUnusableResult(message.Content))
                                 {
-                                    @if (LineCount(message.Content) <= 5)
+                                    @if (GetImagePath(message.Content) is string imgPath && FileToDataUri(imgPath) is string dataUri)
+                                    {
+                                        <div class="tool-result-section tool-image-result">
+                                            <img src="@dataUri" alt="@System.IO.Path.GetFileName(imgPath)" />
+                                        </div>
+                                    }
+                                    else if (LineCount(message.Content) <= 5)
                                     {
                                         <div class="tool-result-section">
                                             <pre class="tool-result-content">@TruncateResult(message.Content)</pre>
@@ -261,6 +275,7 @@
                 <span>Debug Log</span>
                 <div class="debug-actions">
                     <input type="text" class="debug-filter" placeholder="Filter..." @bind="debugFilter" @bind:event="oninput" />
+                    <button @onclick="InspectDom" title="Inspect DOM">🔍</button>
                     <button @onclick="() => debugLog = string.Empty" title="Clear log">Clear</button>
                     <button @onclick="() => showDebugPanel = false" title="Close">✕</button>
                 </div>
@@ -291,6 +306,28 @@
     private string? _redirectTo;
     private bool _needsScroll = true;
     private bool shouldPreventDefault;
+    private int visibleMessageCount = 50;
+    private static readonly Dictionary<string, string> _imageCache = new();
+    private static readonly Dictionary<int, string> _markdownCache = new();
+
+    private List<ChatMessage> VisibleHistory
+    {
+        get
+        {
+            if (activeSession == null) return new();
+            var all = activeSession.History;
+            if (all.Count <= visibleMessageCount) return all.ToList();
+            return all.Skip(all.Count - visibleMessageCount).ToList();
+        }
+    }
+
+    private bool HasMoreMessages => activeSession != null && activeSession.History.Count > visibleMessageCount;
+
+    private void LoadMoreMessages()
+    {
+        visibleMessageCount += 50;
+        StateHasChanged();
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -489,7 +526,10 @@
         var prev = activeSession?.Name;
         activeSession = CopilotService.GetActiveSession();
         if (activeSession?.Name != prev)
+        {
             _needsScroll = true;
+            visibleMessageCount = 50; // Reset window when switching sessions
+        }
         InvokeAsync(async () =>
         {
             StateHasChanged();
@@ -529,6 +569,8 @@
         {
             shouldPreventDefault = true;
             await SendMessage();
+            // Force-clear via JS to remove any residual newline
+            await JS.InvokeVoidAsync("eval", "document.querySelector('.input-row textarea').value = ''");
         }
         else
         {
@@ -583,6 +625,13 @@
         await JS.InvokeVoidAsync("eval", $"navigator.clipboard.writeText('{sessionId}')");
     }
 
+    private async Task InspectDom()
+    {
+        var result = await JS.InvokeAsync<string>("inspectMessages");
+        debugLog += $"\n[DOM Inspect]\n{result}\n";
+        StateHasChanged();
+    }
+
     private string GetInputPlaceholder()
     {
         if (isPlanMode) return "Plan mode: describe what you want planned...";
@@ -596,10 +645,35 @@
         return text.Length > maxLen ? text[..maxLen] + "…" : text;
     }
 
+    private static readonly System.Text.RegularExpressions.Regex ImagePathRegex = new(
+        @"(?<!\(|""|\w)((?:/[\w\-. ]+)+\.(?:png|jpg|jpeg|gif|webp|svg|bmp|tiff))(?!\)|""|\w)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static string RenderMarkdown(string content)
     {
         if (string.IsNullOrEmpty(content)) return "";
-        try { return Markdig.Markdown.ToHtml(content, MdPipeline); }
+
+        var key = content.GetHashCode();
+        if (_markdownCache.TryGetValue(key, out var cached)) return cached;
+
+        try
+        {
+            var html = Markdig.Markdown.ToHtml(content, MdPipeline);
+            html = ImagePathRegex.Replace(html, match =>
+            {
+                var path = match.Value;
+                var dataUri = FileToDataUri(path);
+                if (dataUri != null)
+                    return $"<img src=\"{dataUri}\" alt=\"{System.IO.Path.GetFileName(path)}\" />";
+                return match.Value;
+            });
+
+            // Only cache completed (non-streaming) content — limit cache size
+            if (_markdownCache.Count < 500)
+                _markdownCache[key] = html;
+
+            return html;
+        }
         catch { return System.Net.WebUtility.HtmlEncode(content).Replace("\n", "<br/>"); }
     }
 
@@ -650,6 +724,52 @@
         if (content.StartsWith("GitHub.Copilot.SDK.")) return true;
         if (content is "(no result)" or "Intent logged") return true;
         return false;
+    }
+
+    private static readonly string[] ImageExtensions = { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tiff" };
+
+    private static string? GetImagePath(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+        var trimmed = content.Trim();
+        foreach (var ext in ImageExtensions)
+        {
+            var idx = trimmed.LastIndexOf(ext, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+            var endIdx = idx + ext.Length;
+            var pathStart = trimmed.LastIndexOf(' ', idx) + 1;
+            if (pathStart < 0) pathStart = 0;
+            var path = trimmed[pathStart..endIdx];
+            if (path.StartsWith('/') && System.IO.File.Exists(path))
+                return path;
+        }
+        return null;
+    }
+
+    private static string? FileToDataUri(string path)
+    {
+        if (_imageCache.TryGetValue(path, out var cached)) return cached;
+        try
+        {
+            if (!System.IO.File.Exists(path)) return null;
+            var bytes = System.IO.File.ReadAllBytes(path);
+            var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+            var mime = ext switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                ".bmp" => "image/bmp",
+                ".tiff" or ".tif" => "image/tiff",
+                _ => "application/octet-stream"
+            };
+            var dataUri = $"data:{mime};base64,{Convert.ToBase64String(bytes)}";
+            _imageCache[path] = dataUri;
+            return dataUri;
+        }
+        catch { return null; }
     }
 
     private static string FormatTokenCount(int count) =>
