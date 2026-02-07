@@ -4,6 +4,7 @@
 @inject CopilotService CopilotService
 @inject IJSRuntime JS
 @inject NavigationManager Nav
+@inject DevTunnelService DevTunnelService
 @implements IDisposable
 
 <div class="chat-container">
@@ -153,7 +154,7 @@
                 <span>Debug Log</span>
                 <div class="debug-actions">
                     <input type="text" class="debug-filter" placeholder="Filter..." @bind="debugFilter" @bind:event="oninput" />
-                    <button @onclick="InspectDom" title="Inspect DOM">🔍</button>
+                    <button @onclick="InspectDom" title="Inspect DOM"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
                     <button @onclick="() => debugLog = string.Empty" title="Clear log">Clear</button>
                     <button @onclick="() => showDebugPanel = false" title="Close">✕</button>
                 </div>
@@ -346,6 +347,15 @@
         try
         {
             await CopilotService.InitializeAsync();
+
+            // If no remote URL configured, redirect straight to Settings
+            if (CopilotService.NeedsConfiguration)
+            {
+                _needsRedirect = true;
+                _redirectTo = "/settings";
+                return;
+            }
+
             // RestorePreviousSessionsAsync is already called inside InitializeAsync
             var uiState = CopilotService.LoadUiState();
             if (uiState != null)
@@ -357,6 +367,17 @@
                     _needsRedirect = true;
                     _redirectTo = uiState.CurrentPage;
                 }
+            }
+
+            // Auto-start tunnel if previously configured
+            var connSettings = ConnectionSettings.Load();
+            if (connSettings.AutoStartTunnel && DevTunnelService.State == TunnelState.NotStarted)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await DevTunnelService.HostAsync(connSettings.Port); }
+                    catch (Exception ex) { Console.WriteLine($"[AutoStart] Tunnel failed: {ex.Message}"); }
+                });
             }
         }
         catch (Exception ex)
