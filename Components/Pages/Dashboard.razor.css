@@ -3,7 +3,7 @@
     flex-direction: column;
     height: 100%;
     background: #0f0f23;
-    color: white;
+    color: #a0b4cc;
     padding: 1.5rem;
     overflow-y: auto;
 }
@@ -216,7 +216,7 @@
     border: 1px solid rgba(255,255,255,0.2);
     border-radius: 6px;
     background: rgba(255,255,255,0.08);
-    color: white;
+    color: #a0b4cc;
     font-size: 1rem;
 }
 
@@ -238,7 +238,7 @@
     border: none;
     border-radius: 6px;
     background: #3b82f6;
-    color: white;
+    color: #a0b4cc;
     cursor: pointer;
     font-size: 1.1rem;
 }
@@ -276,7 +276,7 @@
     border: 1px solid rgba(255,255,255,0.2);
     border-radius: 8px;
     background: rgba(255,255,255,0.08);
-    color: white;
+    color: #a0b4cc;
     font-size: 1.05rem;
 }
 
@@ -290,19 +290,22 @@
 }
 
 .broadcast-input button {
-    padding: 0.75rem 1.5rem;
-    border: none;
+    padding: 0.5rem 1.2rem;
+    border: 1px solid rgba(255,255,255,0.15);
     border-radius: 8px;
-    background: #7c3aed;
-    color: white;
-    font-size: 1.05rem;
+    background: rgba(255,255,255,0.06);
+    color: #a0b4cc;
+    font-size: 0.9rem;
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;
+    transition: all 0.15s ease;
 }
 
 .broadcast-input button:hover {
-    background: #6d28d9;
+    background: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.25);
+    color: #c8d8f0;
 }
 
 /* === Mobile responsive === */
