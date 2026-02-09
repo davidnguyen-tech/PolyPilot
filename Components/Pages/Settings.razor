@@ -188,12 +188,30 @@
         <ul>
             @if (PlatformHelper.IsDesktop)
             {
-                <li><strong>Embedded</strong> — Simple, default. Copilot process dies when app closes. All sessions are lost.</li>
-                <li><strong>Persistent</strong> — App spawns a detached Copilot server on a port. Survives app restarts — sessions reconnect after relaunching.</li>
+                <li><strong>Embedded</strong> — Simple. Copilot process dies when app closes. All sessions are lost.</li>
+                <li><strong>Persistent</strong> — Default. App spawns a detached Copilot server on a port. Survives app restarts — sessions reconnect after relaunching.</li>
             }
             <li><strong>Remote</strong> — Connect to a Copilot server on another machine via a DevTunnel URL. Use this from iOS/Android.</li>
         </ul>
     </div>
+
+    @if (PlatformHelper.IsDesktop)
+    {
+        <div class="settings-section info">
+            <h3>⌨️ Keyboard Shortcuts</h3>
+            <table class="hotkey-table">
+                <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+                <tbody>
+                    <tr><td><kbd>⌘E</kbd> / <kbd>Ctrl+E</kbd></td><td>Expand focused session / collapse back to grid</td></tr>
+                    <tr><td><kbd>Escape</kbd></td><td>Collapse expanded session back to grid</td></tr>
+                    <tr><td><kbd>Tab</kbd></td><td>Focus next session input (grid) or switch to next session (expanded)</td></tr>
+                    <tr><td><kbd>Shift+Tab</kbd></td><td>Focus previous session input (grid) or switch to previous session (expanded)</td></tr>
+                    <tr><td><kbd>Enter</kbd></td><td>Send message (or queue if session is busy)</td></tr>
+                    <tr><td><kbd>A−</kbd> / <kbd>A+</kbd></td><td>Decrease / increase font size (in expanded view status bar)</td></tr>
+                </tbody>
+            </table>
+        </div>
+    }
 </div>
 
 @code {
@@ -272,8 +290,8 @@
 
     private string GetModeDescription(ConnectionMode mode) => mode switch
     {
-        ConnectionMode.Embedded => "Default. Copilot process dies when app closes.",
-        ConnectionMode.Persistent => "Copilot server survives app restarts. Sessions persist.",
+        ConnectionMode.Embedded => "Copilot process dies when app closes.",
+        ConnectionMode.Persistent => "Default. Copilot server survives app restarts. Sessions persist.",
         ConnectionMode.Remote => "Connect to a remote server via DevTunnel URL.",
         _ => ""
     };
