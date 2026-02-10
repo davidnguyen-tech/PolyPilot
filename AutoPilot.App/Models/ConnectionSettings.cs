@@ -55,16 +55,26 @@ public class ConnectionSettings
 
     public static ConnectionSettings Load()
     {
+        ConnectionSettings settings;
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var json = File.ReadAllText(SettingsPath);
-                return JsonSerializer.Deserialize<ConnectionSettings>(json) ?? DefaultSettings();
+                settings = JsonSerializer.Deserialize<ConnectionSettings>(json) ?? DefaultSettings();
+            }
+            else
+            {
+                settings = DefaultSettings();
             }
         }
-        catch { }
-        return DefaultSettings();
+        catch { settings = DefaultSettings(); }
+
+        // Ensure loaded mode is valid for this platform
+        if (!PlatformHelper.AvailableModes.Contains(settings.Mode))
+            settings.Mode = PlatformHelper.DefaultMode;
+
+        return settings;
     }
 
     private static ConnectionSettings DefaultSettings()
