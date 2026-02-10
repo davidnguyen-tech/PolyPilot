@@ -182,6 +182,7 @@ public partial class CopilotService
             _activeSessionName = remoteActive;
 
         Debug($"SyncRemoteSessions: Done. _sessions has {_sessions.Count} entries, active={_activeSessionName}");
+        ReconcileOrganization();
     }
 
     private AgentSessionInfo? GetRemoteSession(string name) =>
