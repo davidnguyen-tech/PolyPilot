@@ -47,6 +47,9 @@
         </div>
     </div>
 
+    <div class="settings-group">
+        <h2 class="group-title">Connection</h2>
+
     @if (PlatformHelper.AvailableModes.Length > 1)
     {
         <div class="settings-section">
@@ -211,11 +214,13 @@
             </button>
         </div>
     </div>
+    </div>
 
-    <div class="settings-section">
-        <h3>UI</h3>
-        <div class="settings-subsection">
-            <h4>Chat</h4>
+    <div class="settings-group">
+        <h2 class="group-title">UI</h2>
+
+        <div class="settings-section">
+            <h3>Chat</h3>
             <div class="layout-option">
                 <label>Message layout:</label>
                 <div class="layout-cards">

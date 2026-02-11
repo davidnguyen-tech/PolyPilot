@@ -64,6 +64,18 @@
     color: rgba(255,255,255,0.9);
 }
 
+.settings-group {
+    margin-bottom: 1.5rem;
+}
+
+.settings-group .group-title {
+    font-size: var(--type-title1);
+    color: rgba(255,255,255,0.85);
+    margin: 0 0 0.75rem 0;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
 .mode-cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -770,17 +782,6 @@
 }
 
 /* UI / Chat settings */
-.settings-subsection {
-    margin-top: 0.5rem;
-}
-
-.settings-subsection h4 {
-    font-size: var(--type-body);
-    color: rgba(255,255,255,0.6);
-    margin: 0 0 0.5rem;
-    font-weight: 500;
-}
-
 .layout-option label {
     font-size: var(--type-body);
     color: rgba(255,255,255,0.7);
