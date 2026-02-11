@@ -3,32 +3,107 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:zxing="clr-namespace:ZXing.Net.Maui.Controls;assembly=ZXing.Net.MAUI.Controls"
              x:Class="PolyPilot.QrScannerPage"
-             Title="Scan QR Code"
-             BackgroundColor="#0f0f23">
+             Title=""
+             Shell.NavBarIsVisible="False"
+             BackgroundColor="Black">
 
-    <Grid RowDefinitions="Auto,*,Auto">
-        <Label Grid.Row="0"
-               Text="Point camera at the QR code"
-               TextColor="White"
-               FontSize="18"
-               HorizontalOptions="Center"
-               Padding="0,20,0,10" />
-
+    <Grid>
+        <!-- Full-screen camera -->
         <zxing:CameraBarcodeReaderView
-            Grid.Row="1"
             x:Name="barcodeReader"
             IsDetecting="True"
             CameraLocation="Rear"
             BarcodesDetected="OnBarcodesDetected" />
 
-        <Button Grid.Row="2"
-                Text="Cancel"
-                TextColor="White"
-                BackgroundColor="#3b82f6"
-                CornerRadius="8"
-                Margin="20"
-                HeightRequest="50"
-                Clicked="OnCancelClicked" />
+        <!-- Dark overlays around cutout -->
+        <BoxView x:Name="overlayTop" Color="#AA0f0f23" VerticalOptions="Start" HorizontalOptions="Fill" IsVisible="False" />
+        <BoxView x:Name="overlayBottom" Color="#AA0f0f23" VerticalOptions="End" HorizontalOptions="Fill" IsVisible="False" />
+        <BoxView x:Name="overlayLeft" Color="#AA0f0f23" VerticalOptions="Center" HorizontalOptions="Start" IsVisible="False" />
+        <BoxView x:Name="overlayRight" Color="#AA0f0f23" VerticalOptions="Center" HorizontalOptions="End" IsVisible="False" />
+
+        <!-- Viewfinder border -->
+        <Border x:Name="viewfinder"
+                Stroke="#443b82f6"
+                StrokeThickness="1.5"
+                Background="Transparent"
+                HorizontalOptions="Center"
+                VerticalOptions="Center"
+                WidthRequest="240"
+                HeightRequest="240">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="20" />
+            </Border.StrokeShape>
+            <Grid />
+        </Border>
+
+        <!-- Corner accents -->
+        <Grid HorizontalOptions="Center" VerticalOptions="Center" WidthRequest="240" HeightRequest="240">
+            <BoxView Color="#3b82f6" WidthRequest="36" HeightRequest="3" HorizontalOptions="Start" VerticalOptions="Start" />
+            <BoxView Color="#3b82f6" WidthRequest="3" HeightRequest="36" HorizontalOptions="Start" VerticalOptions="Start" />
+            <BoxView Color="#3b82f6" WidthRequest="36" HeightRequest="3" HorizontalOptions="End" VerticalOptions="Start" />
+            <BoxView Color="#3b82f6" WidthRequest="3" HeightRequest="36" HorizontalOptions="End" VerticalOptions="Start" />
+            <BoxView Color="#3b82f6" WidthRequest="36" HeightRequest="3" HorizontalOptions="Start" VerticalOptions="End" />
+            <BoxView Color="#3b82f6" WidthRequest="3" HeightRequest="36" HorizontalOptions="Start" VerticalOptions="End" />
+            <BoxView Color="#3b82f6" WidthRequest="36" HeightRequest="3" HorizontalOptions="End" VerticalOptions="End" />
+            <BoxView Color="#3b82f6" WidthRequest="3" HeightRequest="36" HorizontalOptions="End" VerticalOptions="End" />
+        </Grid>
+
+        <!-- Top bar -->
+        <Grid ColumnDefinitions="48,*,48" Padding="16,56,16,0" VerticalOptions="Start">
+            <!-- Close button -->
+            <Border Grid.Column="0" Background="#661a1a2e" StrokeThickness="0"
+                    WidthRequest="40" HeightRequest="40" HorizontalOptions="Start">
+                <Border.StrokeShape><RoundRectangle CornerRadius="20" /></Border.StrokeShape>
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnCancelClicked" />
+                </Border.GestureRecognizers>
+                <Image>
+                    <Image.Source>
+                        <FontImageSource Glyph="✕" Color="#a0b4cc" Size="18"  />
+                    </Image.Source>
+                </Image>
+            </Border>
+
+            <Label Grid.Column="1"
+                   Text="Scan QR Code"
+                   TextColor="#a0b4cc"
+                   FontSize="16"
+                   FontAttributes="Bold"
+                   HorizontalTextAlignment="Center"
+                   VerticalTextAlignment="Center" />
+
+            <!-- Torch button -->
+            <Border Grid.Column="2" x:Name="torchBorder" Background="#661a1a2e" StrokeThickness="0"
+                    WidthRequest="40" HeightRequest="40" HorizontalOptions="End">
+                <Border.StrokeShape><RoundRectangle CornerRadius="20" /></Border.StrokeShape>
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnTorchClicked" />
+                </Border.GestureRecognizers>
+                <Image x:Name="torchIcon">
+                    <Image.Source>
+                        <FontImageSource Glyph="◉" Color="#a0b4cc" Size="20" />
+                    </Image.Source>
+                </Image>
+            </Border>
+        </Grid>
+
+        <!-- Instruction below viewfinder (removed) -->
+
+        <!-- Success toast -->
+        <Border x:Name="statusBorder"
+                Background="#CC1a1a2e"
+                Stroke="#3348bb78"
+                StrokeThickness="1"
+                Padding="20,10"
+                HorizontalOptions="Center"
+                VerticalOptions="End"
+                Margin="0,0,0,90"
+                IsVisible="False">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24" />
+            </Border.StrokeShape>
+            <Label x:Name="statusLabel" TextColor="#48bb78" FontSize="14" FontAttributes="Bold" />
+        </Border>
     </Grid>
 
 </ContentPage>

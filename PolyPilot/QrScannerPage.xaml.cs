@@ -9,13 +9,13 @@ public partial class QrScannerPage : ContentPage
     private bool _scanned;
     private int _frameCount;
     private int _detectionCallCount;
+    private bool _torchOn;
 
     public QrScannerPage(QrScannerService service)
     {
         _service = service;
         InitializeComponent();
 
-        // Explicitly set barcode formats to all supported types for maximum compatibility
         barcodeReader.Options = new BarcodeReaderOptions
         {
             Formats = BarcodeFormats.All,
@@ -24,11 +24,6 @@ public partial class QrScannerPage : ContentPage
             TryHarder = true,
         };
 
-        Console.WriteLine($"[QrScanner] Initialized. Options: Formats={barcodeReader.Options.Formats}, AutoRotate={barcodeReader.Options.AutoRotate}, TryHarder={barcodeReader.Options.TryHarder}");
-        Console.WriteLine($"[QrScanner] IsDetecting={barcodeReader.IsDetecting}, IsTorchOn={barcodeReader.IsTorchOn}");
-        Console.WriteLine($"[QrScanner] CameraLocation={barcodeReader.CameraLocation}");
-
-        // Track frame delivery
         barcodeReader.FrameReady += (s, e) =>
         {
             _frameCount++;
@@ -39,48 +34,53 @@ public partial class QrScannerPage : ContentPage
         };
     }
 
+    protected override void OnSizeAllocated(double width, double height)
+    {
+        base.OnSizeAllocated(width, height);
+        LayoutOverlays(width, height);
+    }
+
+    private void LayoutOverlays(double pageWidth, double pageHeight)
+    {
+        const double cutoutSize = 240;
+        var cx = pageWidth / 2;
+        var cy = pageHeight / 2;
+        var left = cx - cutoutSize / 2;
+        var top = cy - cutoutSize / 2;
+
+        overlayTop.HeightRequest = top;
+        overlayBottom.HeightRequest = pageHeight - top - cutoutSize;
+        overlayLeft.WidthRequest = left;
+        overlayLeft.HeightRequest = cutoutSize;
+        overlayLeft.Margin = new Thickness(0, top, 0, 0);
+        overlayRight.WidthRequest = pageWidth - left - cutoutSize;
+        overlayRight.HeightRequest = cutoutSize;
+        overlayRight.Margin = new Thickness(0, top, 0, 0);
+    }
+
     protected override async void OnAppearing()
     {
         base.OnAppearing();
-        Console.WriteLine("[QrScanner] OnAppearing called");
 
         var status = await Permissions.CheckStatusAsync<Permissions.Camera>();
-        Console.WriteLine($"[QrScanner] Camera permission status: {status}");
-
         if (status != PermissionStatus.Granted)
         {
             status = await Permissions.RequestAsync<Permissions.Camera>();
             if (status != PermissionStatus.Granted)
             {
-                Console.WriteLine("[QrScanner] Camera permission denied after request");
                 _service.SetResult(null);
                 await Navigation.PopModalAsync();
                 return;
             }
         }
 
-        Console.WriteLine($"[QrScanner] Camera permission granted");
-        Console.WriteLine($"[QrScanner] Post-appear: IsDetecting={barcodeReader.IsDetecting}, CameraLocation={barcodeReader.CameraLocation}");
-
-        // Force re-enable detection after a short delay
         await Task.Delay(500);
         barcodeReader.IsDetecting = true;
-        Console.WriteLine($"[QrScanner] Re-set IsDetecting=true after 500ms delay");
     }
 
     private void OnBarcodesDetected(object? sender, BarcodeDetectionEventArgs e)
     {
         _detectionCallCount++;
-        Console.WriteLine($"[QrScanner] === BarcodesDetected event #{_detectionCallCount} ===");
-        Console.WriteLine($"[QrScanner] Results count: {e.Results?.Length ?? 0}");
-
-        if (e.Results != null)
-        {
-            foreach (var r in e.Results)
-            {
-                Console.WriteLine($"[QrScanner] Result: Format={r.Format}, Value='{r.Value}' (len={r.Value?.Length ?? 0})");
-            }
-        }
 
         if (_scanned) return;
 
@@ -88,18 +88,36 @@ public partial class QrScannerPage : ContentPage
         if (result == null) return;
 
         _scanned = true;
-        Console.WriteLine($"[QrScanner] *** SCANNED: Format={result.Format}, Value='{result.Value}' ***");
+        Console.WriteLine($"[QrScanner] Scanned: Format={result.Format}, Value='{result.Value}'");
 
         MainThread.BeginInvokeOnMainThread(async () =>
         {
+            // Flash viewfinder green on success
+            viewfinder.Stroke = Color.FromArgb("#48bb78");
+            statusLabel.Text = "✓ QR Code detected";
+            statusBorder.IsVisible = true;
+            await Task.Delay(300);
+
             _service.SetResult(result.Value);
             await Navigation.PopModalAsync();
         });
     }
 
+    private void OnTorchClicked(object? sender, EventArgs e)
+    {
+        _torchOn = !_torchOn;
+        barcodeReader.IsTorchOn = _torchOn;
+        torchBorder.Background = _torchOn ? new SolidColorBrush(Color.FromArgb("#993b82f6")) : new SolidColorBrush(Color.FromArgb("#661a1a2e"));
+        torchIcon.Source = new FontImageSource
+        {
+            Glyph = "◉",
+            Color = _torchOn ? Color.FromArgb("#3b82f6") : Color.FromArgb("#a0b4cc"),
+            Size = 20
+        };
+    }
+
     private async void OnCancelClicked(object? sender, EventArgs e)
     {
-        Console.WriteLine($"[QrScanner] Cancelled. Frames={_frameCount}, DetectionEvents={_detectionCallCount}");
         _service.SetResult(null);
         await Navigation.PopModalAsync();
     }
