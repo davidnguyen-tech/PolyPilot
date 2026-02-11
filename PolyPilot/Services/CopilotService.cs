@@ -9,6 +9,8 @@ namespace PolyPilot.Services;
 public partial class CopilotService : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, SessionState> _sessions = new();
+    // Sessions optimistically added during remote create/resume — protected from removal by SyncRemoteSessions
+    private readonly ConcurrentDictionary<string, byte> _pendingRemoteSessions = new();
     private readonly ChatDatabase _chatDb;
     private readonly ServerManager _serverManager;
     private readonly WsBridgeClient _bridgeClient;
@@ -440,8 +442,18 @@ public partial class CopilotService : IAsyncDisposable
         // In remote mode, delegate to WsBridgeClient
         if (IsRemoteMode)
         {
+            var remoteInfo = new AgentSessionInfo { Name = displayName, SessionId = sessionId, Model = "resumed" };
+            // Set up optimistic state BEFORE sending bridge message to prevent race with SyncRemoteSessions
+            _pendingRemoteSessions[displayName] = 0;
+            _sessions[displayName] = new SessionState { Session = null!, Info = remoteInfo };
+            if (!Organization.Sessions.Any(m => m.SessionName == displayName))
+                Organization.Sessions.Add(new SessionMeta { SessionName = displayName, GroupId = SessionGroup.DefaultId });
+            _activeSessionName = displayName;
+            OnStateChanged?.Invoke();
+            // Now send the bridge message — server may respond before this returns
             await _bridgeClient.ResumeSessionAsync(sessionId, displayName, cancellationToken);
-            return new AgentSessionInfo { Name = displayName, SessionId = sessionId, Model = "resumed" };
+            _ = Task.Delay(30_000).ContinueWith(t => { _pendingRemoteSessions.TryRemove(displayName, out _); });
+            return remoteInfo;
         }
 
         if (!IsInitialized || _client == null)
@@ -570,9 +582,17 @@ public partial class CopilotService : IAsyncDisposable
         // In remote mode, delegate to WsBridgeClient
         if (IsRemoteMode)
         {
+            var remoteInfo = new AgentSessionInfo { Name = name, Model = model ?? "claude-sonnet-4-20250514" };
+            // Set up optimistic state BEFORE sending bridge message to prevent race with SyncRemoteSessions
+            _pendingRemoteSessions[name] = 0;
+            _sessions[name] = new SessionState { Session = null!, Info = remoteInfo };
+            if (!Organization.Sessions.Any(m => m.SessionName == name))
+                Organization.Sessions.Add(new SessionMeta { SessionName = name, GroupId = SessionGroup.DefaultId });
+            _activeSessionName = name;
+            OnStateChanged?.Invoke();
             await _bridgeClient.CreateSessionAsync(name, model, workingDirectory, cancellationToken);
-            // Session will appear via sessions_list push from server
-            return new AgentSessionInfo { Name = name, Model = model ?? "claude-sonnet-4-20250514" };
+            _ = Task.Delay(30_000).ContinueWith(t => { _pendingRemoteSessions.TryRemove(name, out _); });
+            return remoteInfo;
         }
 
         if (!IsInitialized || _client == null)
@@ -782,6 +802,19 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
 
     public async Task AbortSessionAsync(string sessionName)
     {
+        // In remote mode, delegate to bridge server
+        if (IsRemoteMode)
+        {
+            await _bridgeClient.AbortSessionAsync(sessionName);
+            // Optimistically clear processing state
+            if (_sessions.TryGetValue(sessionName, out var remoteState))
+            {
+                remoteState.Info.IsProcessing = false;
+                OnStateChanged?.Invoke();
+            }
+            return;
+        }
+
         if (!_sessions.TryGetValue(sessionName, out var state))
             return;
 
@@ -956,7 +989,8 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         
         foreach (var state in _sessions.Values)
         {
-            await state.Session.DisposeAsync();
+            if (state.Session is not null)
+                await state.Session.DisposeAsync();
         }
         _sessions.Clear();
 
