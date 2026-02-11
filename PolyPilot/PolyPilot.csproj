@@ -51,7 +51,7 @@
 
     <ItemGroup>
         <!-- App Icon -->
-        <MauiIcon Include="Resources\AppIcon\appicon.png" />
+        <MauiIcon Include="Resources\AppIcon\appicon.png" Color="#0f0f23" />
 
         <!-- Splash Screen -->
         <MauiSplashScreen Include="Resources\Splash\splash.png" Color="#0d1526" BaseSize="128,128" />
@@ -85,15 +85,5 @@
     <ItemGroup>
         <TrimmerRootAssembly Include="GitHub.Copilot.SDK" />
     </ItemGroup>
-
-    <!-- Replace MAUI-generated icons with our custom full-bleed versions -->
-    <Target Name="ReplaceAppIcon" AfterTargets="Build" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
-        <Copy SourceFiles="Resources/AppIcon/appicon.icns"
-              DestinationFiles="$(OutputPath)/PolyPilot/Contents/Resources/appicon.icns"
-              OverwriteReadOnlyFiles="true" />
-        <Copy SourceFiles="Resources/AppIcon/CustomAssets.car"
-              DestinationFiles="$(OutputPath)/PolyPilot/Contents/Resources/Assets.car"
-              OverwriteReadOnlyFiles="true" />
-    </Target>
 
 </Project>
