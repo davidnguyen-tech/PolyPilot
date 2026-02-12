@@ -520,7 +520,9 @@ public class WsBridgeServer : IDisposable
         return new SessionsListPayload
         {
             Sessions = sessions,
-            ActiveSession = _copilot.ActiveSessionName
+            ActiveSession = _copilot.ActiveSessionName,
+            GitHubAvatarUrl = _copilot.GitHubAvatarUrl,
+            GitHubLogin = _copilot.GitHubLogin,
         };
     }
 

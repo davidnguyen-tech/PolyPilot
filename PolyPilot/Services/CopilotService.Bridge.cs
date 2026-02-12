@@ -104,6 +104,12 @@ public partial class CopilotService
         var remoteSessions = _bridgeClient.Sessions;
         var remoteActive = _bridgeClient.ActiveSessionName;
 
+        // Sync GitHub user info from remote
+        if (!string.IsNullOrEmpty(_bridgeClient.GitHubAvatarUrl))
+            GitHubAvatarUrl = _bridgeClient.GitHubAvatarUrl;
+        if (!string.IsNullOrEmpty(_bridgeClient.GitHubLogin))
+            GitHubLogin = _bridgeClient.GitHubLogin;
+
         Debug($"SyncRemoteSessions: {remoteSessions.Count} remote sessions, active={remoteActive}");
 
         // Add/update sessions from remote
