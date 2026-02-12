@@ -4,6 +4,8 @@
 @inject CopilotService CopilotService
 @inject ServerManager ServerManager
 @inject DevTunnelService DevTunnelService
+@inject WsBridgeServer WsBridgeServer
+@inject TailscaleService TailscaleService
 @inject QrScannerService QrScanner
 @inject GitAutoUpdateService GitAutoUpdate
 @inject NavigationManager Nav
@@ -191,6 +193,68 @@
             </div>
         }
 
+    @if (PlatformHelper.IsDesktop && (settings.Mode == ConnectionMode.Embedded || settings.Mode == ConnectionMode.Persistent))
+    {
+        <div class="settings-section @(SectionVisible("direct connection sharing tailscale lan password qr") ? "" : "search-hidden")">
+            <h3>Direct Connection</h3>
+            <div class="tunnel-controls">
+                <p class="mode-hint">Share your server directly over LAN, Tailscale, or VPN — no DevTunnel needed.</p>
+
+                <div class="url-input">
+                    <label>Password:</label>
+                    <input type="password" @bind="settings.ServerPassword" placeholder="Set a password for remote access" class="form-input wide" />
+                </div>
+
+                @if (!WsBridgeServer.IsRunning)
+                {
+                    <button class="start-btn" @onclick="StartDirectSharing" disabled="@(string.IsNullOrWhiteSpace(settings.ServerPassword))">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 15 22 11 13 2 9z"/></svg> Enable Direct Sharing
+                    </button>
+                    @if (string.IsNullOrWhiteSpace(settings.ServerPassword))
+                    {
+                        <p class="hint">Set a password above to enable direct sharing.</p>
+                    }
+                }
+                else
+                {
+                    <div class="server-status">
+                        <span class="status-dot alive"></span>
+                        <span>Listening on port @DevTunnelService.BridgePort</span>
+                    </div>
+
+                    <div class="tunnel-url-section">
+                        @if (TailscaleService.IsRunning)
+                        {
+                            <div class="tunnel-url">
+                                <label>Tailscale:</label>
+                                <code>http://@(TailscaleService.MagicDnsName ?? TailscaleService.TailscaleIp):@DevTunnelService.BridgePort</code>
+                                <button class="copy-btn" @onclick="CopyDirectUrl" title="Copy URL"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                            </div>
+                        }
+                        @foreach (var ip in localIps)
+                        {
+                            <div class="tunnel-url">
+                                <label>LAN:</label>
+                                <code>http://@ip:@DevTunnelService.BridgePort</code>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(directQrCodeDataUri))
+                        {
+                            <div class="qr-code">
+                                <img src="@directQrCodeDataUri" alt="QR Code" />
+                                <p class="qr-hint">Scan with PolyPilot on iOS/Android to connect</p>
+                            </div>
+                        }
+                    </div>
+
+                    <button class="stop-btn" @onclick="StopDirectSharing"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> Stop Direct Sharing</button>
+                }
+            </div>
+        </div>
+    }
+
+
     @if (settings.Mode == ConnectionMode.Remote)
     {
         <div class="settings-section @(SectionVisible("remote server url token connect") ? "" : "search-hidden")">
@@ -328,6 +392,8 @@
     private bool tunnelBusy;
     private bool showToken;
     private string? qrCodeDataUri;
+    private string? directQrCodeDataUri;
+    private List<string> localIps = new();
     private CancellationTokenSource? _statusCts;
     private string searchQuery = "";
     private DotNetObjectReference<Settings>? _selfRef;
@@ -399,6 +465,12 @@
 
         if (DevTunnelService.State == TunnelState.Running && DevTunnelService.TunnelUrl != null)
             GenerateQrCode(DevTunnelService.TunnelUrl, DevTunnelService.AccessToken);
+
+        // Detect Tailscale and local IPs for direct sharing
+        await TailscaleService.DetectAsync();
+        DiscoverLocalIps();
+        if (WsBridgeServer.IsRunning)
+            GenerateDirectQrCode();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -705,5 +777,72 @@
         {
             ShowStatus($"Connection failed: {ex.Message}", "error", 8000);
         }
+    }
+
+    // --- Direct Connection Sharing ---
+
+    private void StartDirectSharing()
+    {
+        if (string.IsNullOrWhiteSpace(settings.ServerPassword)) return;
+        WsBridgeServer.ServerPassword = settings.ServerPassword;
+        WsBridgeServer.SetCopilotService(CopilotService);
+        WsBridgeServer.Start(DevTunnelService.BridgePort, settings.Port);
+        settings.DirectSharingEnabled = true;
+        settings.Save();
+        GenerateDirectQrCode();
+        StateHasChanged();
+    }
+
+    private void StopDirectSharing()
+    {
+        WsBridgeServer.Stop();
+        settings.DirectSharingEnabled = false;
+        settings.Save();
+        directQrCodeDataUri = null;
+        StateHasChanged();
+    }
+
+    private async Task CopyDirectUrl()
+    {
+        var host = TailscaleService.MagicDnsName ?? TailscaleService.TailscaleIp ?? localIps.FirstOrDefault() ?? "localhost";
+        var url = $"http://{host}:{DevTunnelService.BridgePort}";
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", url);
+        ShowStatus("URL copied!", "success", 2000);
+    }
+
+    private void DiscoverLocalIps()
+    {
+        localIps.Clear();
+        try
+        {
+            foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (addr.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        localIps.Add(addr.Address.ToString());
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void GenerateDirectQrCode()
+    {
+        var host = TailscaleService.MagicDnsName ?? TailscaleService.TailscaleIp ?? localIps.FirstOrDefault();
+        if (host == null) return;
+        var url = $"http://{host}:{DevTunnelService.BridgePort}";
+        var connectUrl = $"polypilot://connect?url={Uri.EscapeDataString(url)}&token={Uri.EscapeDataString(settings.ServerPassword ?? "")}";
+        try
+        {
+            using var qr = new QRCoder.QRCodeGenerator();
+            using var data = qr.CreateQrCode(connectUrl, QRCoder.QRCodeGenerator.ECCLevel.M);
+            using var png = new QRCoder.PngByteQRCode(data);
+            var bytes = png.GetGraphic(8, new byte[] { 255, 255, 255 }, new byte[] { 30, 30, 30 });
+            directQrCodeDataUri = $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
+        }
+        catch { }
     }
 }
