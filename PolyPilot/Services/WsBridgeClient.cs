@@ -24,6 +24,8 @@ public class WsBridgeClient : IDisposable
     public string? ActiveSessionName { get; private set; }
     public Dictionary<string, List<ChatMessage>> SessionHistories { get; } = new();
     public List<PersistedSessionSummary> PersistedSessions { get; private set; } = new();
+    public string? GitHubAvatarUrl { get; private set; }
+    public string? GitHubLogin { get; private set; }
 
     // --- Events matching CopilotService signatures ---
     public event Action? OnStateChanged;
@@ -321,6 +323,8 @@ public class WsBridgeClient : IDisposable
                 {
                     Sessions = sessions.Sessions;
                     ActiveSessionName = sessions.ActiveSession;
+                    GitHubAvatarUrl = sessions.GitHubAvatarUrl;
+                    GitHubLogin = sessions.GitHubLogin;
                     Console.WriteLine($"[WsBridgeClient] Got {Sessions.Count} sessions, active={ActiveSessionName}");
                     OnStateChanged?.Invoke();
                 }

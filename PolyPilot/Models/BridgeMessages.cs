@@ -87,6 +87,8 @@ public class SessionsListPayload
 {
     public List<SessionSummary> Sessions { get; set; } = new();
     public string? ActiveSession { get; set; }
+    public string? GitHubAvatarUrl { get; set; }
+    public string? GitHubLogin { get; set; }
 }
 
 public class SessionSummary
