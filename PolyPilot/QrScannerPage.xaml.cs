@@ -18,7 +18,7 @@ public partial class QrScannerPage : ContentPage
 
         barcodeReader.Options = new BarcodeReaderOptions
         {
-            Formats = BarcodeFormats.All,
+            Formats = BarcodeFormat.QrCode,
             AutoRotate = true,
             Multiple = false,
             TryHarder = true,
