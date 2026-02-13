@@ -223,6 +223,8 @@
         CopilotService.OnActivity += HandleActivity;
         CopilotService.OnToolStarted += HandleToolStarted;
         CopilotService.OnToolCompleted += HandleToolCompleted;
+        CopilotService.OnReasoningReceived += HandleReasoningReceived;
+        CopilotService.OnReasoningComplete += HandleReasoningComplete;
         CopilotService.OnIntentChanged += HandleIntentChanged;
         CopilotService.OnUsageInfoChanged += HandleUsageInfoChanged;
         CopilotService.OnError += HandleError;
@@ -677,6 +679,9 @@
 
     private void HandleToolStarted(string sessionName, string toolName, string callId, string? inputSummary)
     {
+        // Clear streaming content when tool starts - the text was flushed to history
+        streamingBySession.Remove(sessionName);
+        
         currentToolBySession[sessionName] = toolName;
         if (!toolActivitiesBySession.ContainsKey(sessionName))
             toolActivitiesBySession[sessionName] = new();
@@ -720,6 +725,20 @@
         InvokeAsync(SafeRefreshAsync);
     }
 
+    private void HandleReasoningReceived(string sessionName, string reasoningId, string content)
+    {
+        if (!string.IsNullOrEmpty(sessionName) && !string.IsNullOrEmpty(content))
+            _needsScrollToBottom = true;
+        InvokeAsync(SafeRefreshAsync);
+    }
+
+    private void HandleReasoningComplete(string sessionName, string reasoningId)
+    {
+        if (!string.IsNullOrEmpty(sessionName) && !string.IsNullOrEmpty(reasoningId))
+            _needsScrollToBottom = true;
+        InvokeAsync(SafeRefreshAsync);
+    }
+
     private void HandleUsageInfoChanged(string sessionName, SessionUsageInfo info)
     {
         if (usageBySession.TryGetValue(sessionName, out var current))
@@ -748,6 +767,8 @@
 
     private void HandleTurnStart(string sessionName)
     {
+        // Clear streaming content from previous turn
+        streamingBySession.Remove(sessionName);
         currentToolBySession.Remove(sessionName);
         toolActivitiesBySession[sessionName] = new();
         InvokeAsync(SafeRefreshAsync);
@@ -1953,6 +1974,8 @@
         CopilotService.OnActivity -= HandleActivity;
         CopilotService.OnToolStarted -= HandleToolStarted;
         CopilotService.OnToolCompleted -= HandleToolCompleted;
+        CopilotService.OnReasoningReceived -= HandleReasoningReceived;
+        CopilotService.OnReasoningComplete -= HandleReasoningComplete;
         CopilotService.OnIntentChanged -= HandleIntentChanged;
         CopilotService.OnUsageInfoChanged -= HandleUsageInfoChanged;
         CopilotService.OnError -= HandleError;
