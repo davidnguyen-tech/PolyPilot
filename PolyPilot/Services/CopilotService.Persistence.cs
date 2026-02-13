@@ -98,22 +98,37 @@ public partial class CopilotService
 
     }
 
-    public void SaveUiState(string currentPage, string? activeSession = null, int? fontSize = null, string? selectedModel = null)
+    public void SaveUiState(string currentPage, string? activeSession = null, int? fontSize = null, string? selectedModel = null, bool? expandedGrid = null, string? expandedSession = "<<unspecified>>")
     {
         try
         {
+            var logMsg = $"[{DateTime.Now:HH:mm:ss}] SaveUiState called: expandedSession param = '{expandedSession ?? "NULL"}'";
+            Console.WriteLine(logMsg);
+            File.AppendAllText(Path.Combine(PolyPilotBaseDir, "ui-state-debug.log"), logMsg + "\n");
+            
             var existing = LoadUiState();
             var state = new UiState
             {
                 CurrentPage = currentPage,
                 ActiveSession = activeSession ?? _activeSessionName,
                 FontSize = fontSize ?? existing?.FontSize ?? 20,
-                SelectedModel = selectedModel ?? existing?.SelectedModel
+                SelectedModel = selectedModel ?? existing?.SelectedModel,
+                ExpandedGrid = expandedGrid ?? existing?.ExpandedGrid ?? false,
+                ExpandedSession = expandedSession == "<<unspecified>>" ? existing?.ExpandedSession : expandedSession
             };
             var json = JsonSerializer.Serialize(state);
             File.WriteAllText(UiStateFile, json);
+            
+            var saveMsg = $"[{DateTime.Now:HH:mm:ss}] Saved UI state: Page={currentPage}, ExpandedSession={state.ExpandedSession ?? "NULL"}, ExpandedGrid={state.ExpandedGrid}";
+            Console.WriteLine(saveMsg);
+            File.AppendAllText(Path.Combine(PolyPilotBaseDir, "ui-state-debug.log"), saveMsg + "\n");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            var errMsg = $"[{DateTime.Now:HH:mm:ss}] Failed to save UI state: {ex.Message}";
+            Console.WriteLine(errMsg);
+            File.AppendAllText(Path.Combine(PolyPilotBaseDir, "ui-state-debug.log"), errMsg + "\n");
+        }
     }
 
     public UiState? LoadUiState()
