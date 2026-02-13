@@ -117,7 +117,6 @@ public partial class CopilotService : IAsyncDisposable
     }
 
     public string DefaultModel { get; set; } = "claude-opus-4.6";
-    public string? SystemInstructions { get; set; }
     public bool IsInitialized { get; private set; }
     public bool IsRestoring { get; private set; }
     public bool NeedsConfiguration { get; private set; }
@@ -269,14 +268,9 @@ public partial class CopilotService : IAsyncDisposable
         IsInitialized = true;
         NeedsConfiguration = false;
         Debug($"Copilot client started in {settings.Mode} mode");
-
-        // Load default system instructions from the project's copilot-instructions.md
-        var instructionsPath = Path.Combine(ProjectDir, ".github", "copilot-instructions.md");
-        if (File.Exists(instructionsPath) && string.IsNullOrEmpty(SystemInstructions))
-        {
-            SystemInstructions = await File.ReadAllTextAsync(instructionsPath, cancellationToken);
-            Debug("Loaded system instructions from copilot-instructions.md");
-        }
+        
+        // Note: copilot-instructions.md is automatically loaded by the CLI from .github/ in the working directory.
+        // We don't need to manually load and inject it here.
 
         OnStateChanged?.Invoke();
 
@@ -883,6 +877,8 @@ public partial class CopilotService : IAsyncDisposable
         var sessionDir = string.IsNullOrWhiteSpace(workingDirectory) ? ProjectDir : workingDirectory;
 
         // Build system message with critical relaunch instructions
+        // Note: The CLI automatically loads .github/copilot-instructions.md from the working directory,
+        // so we only inject the dynamic relaunch warning here (not the full instructions file).
         var systemContent = new StringBuilder();
         // Only include relaunch instructions when targeting the PolyPilot directory
         if (string.Equals(sessionDir, ProjectDir, StringComparison.OrdinalIgnoreCase))
@@ -897,10 +893,6 @@ This script builds the app, launches a new instance, waits for it to start, then
 NEVER use 'dotnet build' + 'open' separately. NEVER skip the relaunch after code changes.
 ALWAYS run the relaunch script as the final step after making changes to this project.
 ");
-        }
-        if (!string.IsNullOrEmpty(SystemInstructions))
-        {
-            systemContent.AppendLine(SystemInstructions);
         }
 
         var settings = ConnectionSettings.Load();
@@ -1020,17 +1012,25 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         if (!string.IsNullOrEmpty(state.Info.SessionId))
             _ = _chatDb.AddMessageAsync(state.Info.SessionId, state.Info.History.Last());
 
-        Console.WriteLine($"[DEBUG] Sending prompt to session '{sessionName}': {prompt.Substring(0, Math.Min(50, prompt.Length))}...");
+        Console.WriteLine($"[DEBUG] Sending prompt to session '{sessionName}' (Model: {state.Info.Model}): {prompt.Substring(0, Math.Min(50, prompt.Length))}...");
+        Console.WriteLine($"[MODEL] Session '{sessionName}' using model: {state.Info.Model}");
         
         try 
         {
-            var messageOptions = new MessageOptions { Prompt = prompt };
+            var messageOptions = new MessageOptions 
+            { 
+                Prompt = prompt
+            };
             
             // Attach images via SDK if available
             if (imagePaths != null && imagePaths.Count > 0)
             {
                 TryAttachImages(messageOptions, imagePaths);
             }
+            
+            // Note: Model is set at session creation time via SessionConfig.
+            // Changing session.Model at runtime only updates the UI display.
+            // To actually switch models, the session would need to be recreated.
             
             await state.Session.SendAsync(messageOptions, cancellationToken);
         }
