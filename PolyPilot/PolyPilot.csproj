@@ -83,7 +83,7 @@
 
     <!-- Prevent linker from trimming SDK event types needed for pattern matching -->
     <ItemGroup>
-        <TrimmerRootAssembly Include="GitHub.Copilot.SDK" />
+        <TrimmerRootAssembly Include="GitHub.Copilot.SDK" RootMode="All" />
     </ItemGroup>
 
     <!-- The SDK only maps standard RIDs (osx-arm64, etc.) to download the copilot CLI.
