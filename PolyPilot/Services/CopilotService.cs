@@ -11,10 +11,12 @@ public partial class CopilotService : IAsyncDisposable
     private readonly ConcurrentDictionary<string, SessionState> _sessions = new();
     // Sessions optimistically added during remote create/resume — protected from removal by SyncRemoteSessions
     private readonly ConcurrentDictionary<string, byte> _pendingRemoteSessions = new();
-    private readonly ChatDatabase _chatDb;
-    private readonly ServerManager _serverManager;
-    private readonly WsBridgeClient _bridgeClient;
-    private readonly DemoService _demoService;
+    // Session IDs explicitly closed by the user — excluded from merge-back during SaveActiveSessionsToDisk
+    private readonly ConcurrentDictionary<string, byte> _closedSessionIds = new();
+    private readonly IChatDatabase _chatDb;
+    private readonly IServerManager _serverManager;
+    private readonly IWsBridgeClient _bridgeClient;
+    private readonly IDemoService _demoService;
     private readonly IServiceProvider? _serviceProvider;
     private CopilotClient? _client;
     private string? _activeSessionName;
@@ -125,24 +127,33 @@ public partial class CopilotService : IAsyncDisposable
     public bool IsBridgeConnected => _bridgeClient.IsConnected;
     public bool IsDemoMode { get; private set; }
     public string? ActiveSessionName => _activeSessionName;
-    public ChatDatabase ChatDb => _chatDb;
+    public IChatDatabase ChatDb => _chatDb;
     public ConnectionMode CurrentMode { get; private set; } = ConnectionMode.Embedded;
     public List<string> AvailableModels { get; private set; } = new();
 
     private readonly RepoManager _repoManager;
     
-    public CopilotService(ChatDatabase chatDb, ServerManager serverManager, WsBridgeClient bridgeClient, RepoManager repoManager, IServiceProvider serviceProvider)
+    public CopilotService(IChatDatabase chatDb, IServerManager serverManager, IWsBridgeClient bridgeClient, RepoManager repoManager, IServiceProvider serviceProvider)
+    : this(chatDb, serverManager, bridgeClient, repoManager, serviceProvider, new DemoService())
+    {
+    }
+
+    internal CopilotService(IChatDatabase chatDb, IServerManager serverManager, IWsBridgeClient bridgeClient, RepoManager repoManager, IServiceProvider serviceProvider, IDemoService demoService)
     {
         _chatDb = chatDb;
         _serverManager = serverManager;
         _bridgeClient = bridgeClient;
         _repoManager = repoManager;
         _serviceProvider = serviceProvider;
-        _demoService = new DemoService();
+        _demoService = demoService;
     }
 
     // Debug info
     public string LastDebugMessage { get; private set; } = "";
+
+    // Transient notice shown when the service fell back from the user's preferred mode
+    public string? FallbackNotice { get; private set; }
+    public void ClearFallbackNotice() => FallbackNotice = null;
 
     // GitHub user info
     public string? GitHubAvatarUrl { get; private set; }
@@ -258,6 +269,7 @@ public partial class CopilotService : IAsyncDisposable
                     Debug("Failed to auto-start server, falling back to Embedded mode");
                     settings.Mode = ConnectionMode.Embedded;
                     CurrentMode = ConnectionMode.Embedded;
+                    FallbackNotice = "Persistent server couldn't start — fell back to Embedded mode. Your sessions won't persist across restarts. Go to Settings to fix.";
                 }
             }
             else
@@ -268,11 +280,24 @@ public partial class CopilotService : IAsyncDisposable
 
         _client = CreateClient(settings);
 
-        await _client.StartAsync(cancellationToken);
-        IsInitialized = true;
-        NeedsConfiguration = false;
-        Debug($"Copilot client started in {settings.Mode} mode");
-        
+        try
+        {
+            await _client.StartAsync(cancellationToken);
+            IsInitialized = true;
+            NeedsConfiguration = false;
+            Debug($"Copilot client started in {settings.Mode} mode");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Debug($"Failed to start Copilot client: {ex.Message}");
+            try { await _client.DisposeAsync(); } catch { }
+            _client = null;
+            IsInitialized = false;
+            NeedsConfiguration = true;
+            OnStateChanged?.Invoke();
+            return;
+        }
         // Note: copilot-instructions.md is automatically loaded by the CLI from .github/ in the working directory.
         // We don't need to manually load and inject it here.
 
@@ -363,6 +388,7 @@ public partial class CopilotService : IAsyncDisposable
             try { if (state.Session != null) await state.Session.DisposeAsync(); } catch { }
         }
         _sessions.Clear();
+        _closedSessionIds.Clear();
         _activeSessionName = null;
 
         if (_client != null)
@@ -375,6 +401,7 @@ public partial class CopilotService : IAsyncDisposable
         IsInitialized = false;
         IsRemoteMode = false;
         IsDemoMode = false;
+        FallbackNotice = null; // Clear any previous fallback notice
         CurrentMode = settings.Mode;
         OnStateChanged?.Invoke();
 
@@ -394,14 +421,31 @@ public partial class CopilotService : IAsyncDisposable
 
         _client = CreateClient(settings);
 
-        await _client.StartAsync(cancellationToken);
-        IsInitialized = true;
-        NeedsConfiguration = false;
-        Debug($"Reconnected in {settings.Mode} mode");
-        OnStateChanged?.Invoke();
+        try
+        {
+            await _client.StartAsync(cancellationToken);
+            IsInitialized = true;
+            NeedsConfiguration = false;
+            Debug($"Reconnected in {settings.Mode} mode");
+            OnStateChanged?.Invoke();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Debug($"Failed to reconnect Copilot client: {ex.Message}");
+            try { await _client.DisposeAsync(); } catch { }
+            _client = null;
+            IsInitialized = false;
+            NeedsConfiguration = true;
+            OnStateChanged?.Invoke();
+            return;
+        }
 
         // Restore previous sessions
+        LoadOrganization();
         await RestorePreviousSessionsAsync(cancellationToken);
+        ReconcileOrganization();
+        OnStateChanged?.Invoke();
     }
 
     private CopilotClient CreateClient(ConnectionSettings settings)
@@ -1068,7 +1112,7 @@ public partial class CopilotService : IAsyncDisposable
 
         _activeSessionName ??= displayName;
         OnStateChanged?.Invoke();
-        SaveActiveSessionsToDisk();
+        if (!IsRestoring) SaveActiveSessionsToDisk();
         if (!IsRestoring) ReconcileOrganization();
         return info;
     }
@@ -1575,6 +1619,10 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
 
         if (!_sessions.TryRemove(name, out var state))
             return false;
+
+        // Track as explicitly closed so merge doesn't re-add from file
+        if (state.Info.SessionId != null)
+            _closedSessionIds[state.Info.SessionId] = 0;
 
         if (state.Session is not null)
             await state.Session.DisposeAsync();

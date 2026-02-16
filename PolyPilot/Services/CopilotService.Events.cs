@@ -1,6 +1,7 @@
 using System.Text;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using PolyPilot.Models;
 using GitHub.Copilot.SDK;
 
@@ -365,7 +366,7 @@ public partial class CopilotService
                     state.Info.Model = normalizedStartModel;
                     Debug($"Session model from start event: {startModel} → {normalizedStartModel}");
                 }
-                SaveActiveSessionsToDisk();
+                if (!IsRestoring) SaveActiveSessionsToDisk();
                 break;
 
             case SessionUsageInfoEvent usageInfo:
