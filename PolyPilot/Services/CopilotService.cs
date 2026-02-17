@@ -1748,6 +1748,14 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
         }
     }
 
+    public async Task RefreshSessionsAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsRemoteMode && _bridgeClient.IsConnected)
+            await _bridgeClient.RequestSessionsAsync(cancellationToken);
+
+        OnStateChanged?.Invoke();
+    }
+
     public async Task<bool> CloseSessionAsync(string name)
     {
         // Clean up any active reflection cycle (including evaluator session)
