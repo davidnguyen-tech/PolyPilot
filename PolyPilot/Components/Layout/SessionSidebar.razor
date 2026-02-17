@@ -759,10 +759,12 @@ else
     private async Task SelectSession(string name)
     {
         completedSessions.Remove(name);
+        // CSS visibility already toggled by JS capture-phase click handler
         CopilotService.SwitchSession(name);
         var session = CopilotService.GetSession(name);
         if (session != null) session.LastReadMessageCount = session.History.Count;
-        CopilotService.SaveUiState("/", name);
+        // Fire-and-forget to avoid blocking UI
+        _ = Task.Run(() => CopilotService.SaveUiState("/", name));
         await OnSessionSelected.InvokeAsync();
         if (currentPage != "/")
             Nav.NavigateTo("/");

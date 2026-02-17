@@ -569,6 +569,38 @@
             window.addEventListener('scroll', updateDropdownPosition, true);
         };
 
+        window.switchKeepAliveSlot = function(activeSlotId, sessionName) {
+            document.querySelectorAll('.keep-alive-slot').forEach(function(slot) {
+                if (slot.id === activeSlotId) {
+                    slot.classList.add('active');
+                } else {
+                    slot.classList.remove('active');
+                }
+            });
+            // Instantly toggle sidebar active highlight without waiting for Blazor render
+            if (sessionName) {
+                document.querySelectorAll('.session-item').forEach(function(item) {
+                    var sn = item.getAttribute('data-session-name');
+                    if (sn === sessionName) {
+                        item.classList.add('active');
+                        item.classList.remove('completed');
+                    } else if (item.classList.contains('active')) {
+                        item.classList.remove('active');
+                    }
+                });
+            }
+        };
+
+        // Capture-phase click handler: instantly switch CSS before Blazor processes the event
+        document.addEventListener('click', function(e) {
+            var item = e.target.closest('.session-item[data-session-name]');
+            if (!item || item.closest('.persisted')) return;
+            var name = item.getAttribute('data-session-name');
+            if (!name) return;
+            var slotId = 'slot-' + name.replace(/ /g, '-');
+            window.switchKeepAliveSlot(slotId, name);
+        }, true);
+
         window.restoreDraftsAndFocus = function(draftsJson, focusId, selStart, selEnd, forceScroll) {
             window.ensureFiestaMentionAutocomplete();
             function doScroll() {
@@ -604,15 +636,8 @@
                 });
             }
             doScroll();
-            // Multiple delayed scrolls to catch content that renders asynchronously
-            if (forceScroll) {
-                setTimeout(doScroll, 50);
-                setTimeout(doScroll, 150);
-                setTimeout(doScroll, 300);
-            } else {
-                // Even without force, do a follow-up scroll for async content
-                requestAnimationFrame(doScroll);
-            }
+            // Single rAF follow-up is sufficient — content is rendered synchronously by Blazor
+            requestAnimationFrame(doScroll);
             var drafts = JSON.parse(draftsJson || '{}');
             for (var id in drafts) {
                 var el = document.getElementById(id);
