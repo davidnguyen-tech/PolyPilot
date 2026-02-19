@@ -111,7 +111,7 @@ public partial class CopilotService
         _bridgeClient.OnTurnStart += (s) =>
         {
             var session = GetRemoteSession(s);
-            if (session != null) session.IsProcessing = true;
+            if (session != null) { session.IsProcessing = true; }
             InvokeOnUI(() => OnTurnStart?.Invoke(s));
         };
         _bridgeClient.OnTurnEnd += (s) =>
@@ -120,10 +120,11 @@ public partial class CopilotService
             var session = GetRemoteSession(s);
             if (session != null)
             {
+                Debug($"[BRIDGE-COMPLETE] '{session.Name}' OnTurnEnd cleared IsProcessing");
                 session.IsProcessing = false;
                 // Mark last assistant message as complete
                 var lastAssistant = session.History.LastOrDefault(m => m.IsAssistant && !m.IsComplete);
-                if (lastAssistant != null) lastAssistant.IsComplete = true;
+                if (lastAssistant != null) { lastAssistant.IsComplete = true; lastAssistant.Model = session.Model; }
             }
             InvokeOnUI(() => OnTurnEnd?.Invoke(s));
         };

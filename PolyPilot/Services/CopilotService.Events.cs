@@ -275,6 +275,7 @@ public partial class CopilotService
             case ToolExecutionStartEvent toolStart:
                 if (toolStart.Data == null) break;
                 Interlocked.Increment(ref state.ActiveToolCallCount);
+                Volatile.Write(ref state.HasUsedToolsThisTurn, true);
                 var startToolName = toolStart.Data.ToolName ?? "unknown";
                 var startCallId = toolStart.Data.ToolCallId ?? "";
                 var toolInput = ExtractToolInput(toolStart.Data);
@@ -494,10 +495,15 @@ public partial class CopilotService
             case SessionErrorEvent err:
                 var errMsg = err.Data?.Message ?? "Unknown error";
                 CancelProcessingWatchdog(state);
-                Invoke(() => OnError?.Invoke(sessionName, errMsg));
-                state.ResponseCompletion?.TrySetException(new Exception(errMsg));
-                state.Info.IsProcessing = false;
-                Invoke(() => OnStateChanged?.Invoke());
+                InvokeOnUI(() =>
+                {
+                    OnError?.Invoke(sessionName, errMsg);
+                    state.ResponseCompletion?.TrySetException(new Exception(errMsg));
+                    Debug($"[ERROR] '{sessionName}' SessionErrorEvent cleared IsProcessing (error={errMsg})");
+                    state.Info.IsProcessing = false;
+                    state.Info.IsResumed = false;
+                    OnStateChanged?.Invoke();
+                });
                 break;
 
             case SessionModelChangeEvent modelChange:
@@ -598,9 +604,9 @@ public partial class CopilotService
     private void FlushCurrentResponse(SessionState state)
     {
         var text = state.CurrentResponse.ToString();
-        if (string.IsNullOrEmpty(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
         
-        var msg = new ChatMessage("assistant", text, DateTime.Now);
+        var msg = new ChatMessage("assistant", text, DateTime.Now) { Model = state.Info.Model };
         state.Info.History.Add(msg);
         state.Info.MessageCount = state.Info.History.Count;
         
@@ -643,10 +649,12 @@ public partial class CopilotService
               $"(responseLen={state.CurrentResponse.Length}, thread={Environment.CurrentManagedThreadId})");
         
         CancelProcessingWatchdog(state);
+        state.HasUsedToolsThisTurn = false;
+        state.Info.IsResumed = false; // Clear after first successful turn
         var response = state.CurrentResponse.ToString();
-        if (!string.IsNullOrEmpty(response))
+        if (!string.IsNullOrWhiteSpace(response))
         {
-            var msg = new ChatMessage("assistant", response, DateTime.Now);
+            var msg = new ChatMessage("assistant", response, DateTime.Now) { Model = state.Info.Model };
             state.Info.History.Add(msg);
             state.Info.MessageCount = state.Info.History.Count;
             // If user is viewing this session, keep it read
@@ -1096,13 +1104,23 @@ public partial class CopilotService
                 var lastEventTicks = Interlocked.Read(ref state.LastEventAtTicks);
                 var elapsed = (DateTime.UtcNow - new DateTime(lastEventTicks)).TotalSeconds;
                 var hasActiveTool = Interlocked.CompareExchange(ref state.ActiveToolCallCount, 0, 0) > 0;
-                var effectiveTimeout = hasActiveTool ? WatchdogToolExecutionTimeoutSeconds : WatchdogInactivityTimeoutSeconds;
+                // Use the longer tool-execution timeout if:
+                // 1. A tool call is actively running (hasActiveTool), OR
+                // 2. This is a resumed session that was mid-turn (agent sessions routinely
+                //    have 2-3 min gaps between events while the model reasons), OR
+                // 3. Tools have been executed this turn (HasUsedToolsThisTurn) — even between
+                //    tool rounds when ActiveToolCallCount is 0, the model may spend minutes
+                //    thinking about what tool to call next.
+                var useToolTimeout = hasActiveTool || state.Info.IsResumed || Volatile.Read(ref state.HasUsedToolsThisTurn);
+                var effectiveTimeout = useToolTimeout
+                    ? WatchdogToolExecutionTimeoutSeconds
+                    : WatchdogInactivityTimeoutSeconds;
 
                 if (elapsed >= effectiveTimeout)
                 {
                     var timeoutMinutes = effectiveTimeout / 60;
                     Debug($"Session '{sessionName}' watchdog: no events for {elapsed:F0}s " +
-                          $"(timeout={effectiveTimeout}s, hasActiveTool={hasActiveTool}), clearing stuck processing state");
+                          $"(timeout={effectiveTimeout}s, hasActiveTool={hasActiveTool}, isResumed={state.Info.IsResumed}, hasUsedTools={state.HasUsedToolsThisTurn}), clearing stuck processing state");
                     // Capture generation before posting — same guard pattern as CompleteResponse.
                     // Prevents a stale watchdog callback from killing a new turn if the user
                     // aborts + resends between the Post() and the callback execution.
@@ -1121,6 +1139,8 @@ public partial class CopilotService
                         }
                         CancelProcessingWatchdog(state);
                         Interlocked.Exchange(ref state.ActiveToolCallCount, 0);
+                        state.HasUsedToolsThisTurn = false;
+                        state.Info.IsResumed = false;
                         state.Info.IsProcessing = false;
                         state.Info.History.Add(ChatMessage.SystemMessage(
                             "⚠️ Session appears stuck — no response received. You can try sending your message again."));
