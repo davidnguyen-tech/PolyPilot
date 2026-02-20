@@ -259,22 +259,22 @@ jobs:
           BETA_GROUP_NAME: 'MAUI Team'
         run: |
           set -euo pipefail
-          
+
           # Install fastlane
           gem install fastlane --no-document
-          
+
           # Write API key JSON for fastlane
           mkdir -p private_keys
           echo "$APPSTORE_PRIVATE_KEY" > "private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
-          cat > api_key.json <<EOF
+          cat > api_key.json <<APIEOF
           {
-            "key_id": "$APPSTORE_KEY_ID",
-            "issuer_id": "$APPSTORE_ISSUER_ID",
+            "key_id": "${APPSTORE_KEY_ID}",
+            "issuer_id": "${APPSTORE_ISSUER_ID}",
             "key_filepath": "private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           }
-          EOF
-          
-          # Distribute the build to the beta group
+          APIEOF
+
+          echo "Waiting for build processing before distributing..."
           fastlane pilot distribute \
             --api_key_path api_key.json \
             --app_identifier "$APP_BUNDLE_ID" \
@@ -282,5 +282,5 @@ jobs:
             --app_version "$APP_VERSION" \
             --groups "$BETA_GROUP_NAME" \
             --distribute_only
-          
+
           rm -rf private_keys api_key.json
