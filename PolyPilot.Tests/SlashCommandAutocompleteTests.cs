@@ -1,0 +1,152 @@
+using System.Text.RegularExpressions;
+
+namespace PolyPilot.Tests;
+
+/// <summary>
+/// Validates that the slash command autocomplete list in index.html stays in sync
+/// with the actual slash command handler in Dashboard.razor and the /help output.
+/// </summary>
+public class SlashCommandAutocompleteTests
+{
+    private static readonly string RepoRoot = Path.GetFullPath(
+        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", ".."));
+
+    private static readonly string IndexHtmlPath = Path.Combine(
+        RepoRoot, "PolyPilot", "wwwroot", "index.html");
+
+    private static readonly string DashboardPath = Path.Combine(
+        RepoRoot, "PolyPilot", "Components", "Pages", "Dashboard.razor");
+
+    /// <summary>
+    /// Extract command names from the JS COMMANDS array in index.html.
+    /// </summary>
+    private static HashSet<string> GetAutocompleteCommands()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+        // Match: { cmd: '/help', desc: '...' }
+        var matches = Regex.Matches(html, @"cmd:\s*'(/\w+)'");
+        return matches.Select(m => m.Groups[1].Value).ToHashSet();
+    }
+
+    /// <summary>
+    /// Extract command names from the switch cases in HandleSlashCommand.
+    /// Only captures the top-level switch (before any nested private method).
+    /// </summary>
+    private static HashSet<string> GetHandlerCommands()
+    {
+        var razor = File.ReadAllText(DashboardPath);
+        var handleMethodStart = razor.IndexOf("private async Task HandleSlashCommand", StringComparison.Ordinal);
+        if (handleMethodStart < 0) throw new InvalidOperationException("HandleSlashCommand not found");
+        var section = razor.Substring(handleMethodStart);
+        // Stop at the next private method definition to avoid sub-command switch blocks
+        var nextMethod = Regex.Match(section.Substring(1), @"\n\s+private\s+");
+        if (nextMethod.Success)
+            section = section.Substring(0, nextMethod.Index + 1);
+        var matches = Regex.Matches(section, @"case\s+""(\w+)"":");
+        return matches.Select(m => "/" + m.Groups[1].Value).ToHashSet();
+    }
+
+    /// <summary>
+    /// Extract command names listed in the /help output text.
+    /// </summary>
+    private static HashSet<string> GetHelpTextCommands()
+    {
+        var razor = File.ReadAllText(DashboardPath);
+        // Match: - `/help` — ...
+        var matches = Regex.Matches(razor, @"- `/(\w+)");
+        return matches.Select(m => "/" + m.Groups[1].Value).ToHashSet();
+    }
+
+    [Fact]
+    public void AutocompleteList_Exists_InIndexHtml()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+        Assert.Contains("ensureSlashCommandAutocomplete", html);
+        Assert.Contains("slash-cmd-autocomplete", html);
+    }
+
+    [Fact]
+    public void AutocompleteCommands_MatchHandlerCommands()
+    {
+        var autocomplete = GetAutocompleteCommands();
+        var handler = GetHandlerCommands();
+
+        // The "plugins" alias and "default" fallback are not shown in autocomplete — exclude them
+        handler.Remove("/plugins");
+        // "default" is a catch-all, not a real command
+        handler.ExceptWith(handler.Where(c => c == "/default").ToList());
+
+        // Every autocomplete entry should have a handler
+        foreach (var cmd in autocomplete)
+        {
+            Assert.True(handler.Contains(cmd),
+                $"Autocomplete command {cmd} has no handler in Dashboard.razor");
+        }
+
+        // Every handler (except aliases) should appear in autocomplete
+        foreach (var cmd in handler)
+        {
+            Assert.True(autocomplete.Contains(cmd),
+                $"Handler command {cmd} is missing from the autocomplete list in index.html");
+        }
+    }
+
+    [Fact]
+    public void AutocompleteCommands_MatchHelpText()
+    {
+        var autocomplete = GetAutocompleteCommands();
+        var helpText = GetHelpTextCommands();
+
+        // /mcp appears twice in help (once as /mcp and once in subcommand description).
+        // /plugin also. Just check that autocomplete covers help entries.
+        foreach (var cmd in autocomplete)
+        {
+            Assert.True(helpText.Contains(cmd),
+                $"Autocomplete command {cmd} is not mentioned in /help output");
+        }
+    }
+
+    [Fact]
+    public void AutocompleteList_HasExpectedMinimumCommands()
+    {
+        var commands = GetAutocompleteCommands();
+        var expected = new[] { "/help", "/clear", "/compact", "/new", "/sessions",
+                               "/rename", "/version", "/diff", "/status", "/mcp",
+                               "/plugin", "/reflect" };
+
+        foreach (var cmd in expected)
+        {
+            Assert.Contains(cmd, commands);
+        }
+    }
+
+    [Fact]
+    public void AutocompleteDropdown_OpensAboveInput()
+    {
+        // Verify the dropdown positioning code places it above the input (like VS Code command palette)
+        var html = File.ReadAllText(IndexHtmlPath);
+        // The updateDropdownPosition should calculate top based on rect.top (above input)
+        Assert.Contains("rect.top - visibleHeight", html);
+    }
+
+    [Fact]
+    public void AutocompleteDropdown_SupportsKeyboardNavigation()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+        // Verify ArrowUp/ArrowDown/Tab/Escape handlers exist in the slash autocomplete
+        var slashSection = html.Substring(html.IndexOf("ensureSlashCommandAutocomplete", StringComparison.Ordinal));
+        Assert.Contains("ArrowDown", slashSection);
+        Assert.Contains("ArrowUp", slashSection);
+        Assert.Contains("'Tab'", slashSection);
+        Assert.Contains("'Escape'", slashSection);
+    }
+
+    [Fact]
+    public void AutocompleteDropdown_TargetsCorrectInputSelectors()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+        // Should target both expanded view textarea and card view input
+        Assert.Contains(".input-row textarea", html);
+        Assert.Contains(".card-input input", html);
+    }
+}

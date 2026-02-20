@@ -603,6 +603,7 @@
 
         window.restoreDraftsAndFocus = function(draftsJson, focusId, selStart, selEnd, forceScroll) {
             window.ensureFiestaMentionAutocomplete();
+            window.ensureSlashCommandAutocomplete();
             function doScroll() {
                 // Expanded chat: auto-follow with near-bottom tracking
                 document.querySelectorAll('.messages').forEach(function(el) {
@@ -657,6 +658,213 @@
         };
 
         window.ensureFiestaMentionAutocomplete();
+
+        // === Slash command autocomplete ===
+        window.ensureSlashCommandAutocomplete = function() {
+            if (window.__slashCmdSetup) return;
+            window.__slashCmdSetup = true;
+
+            var COMMANDS = [
+                { cmd: '/help', desc: 'Show available commands' },
+                { cmd: '/clear', desc: 'Clear chat history' },
+                { cmd: '/compact', desc: 'Summarize conversation' },
+                { cmd: '/new', desc: 'Create a new session' },
+                { cmd: '/sessions', desc: 'List all sessions' },
+                { cmd: '/rename', desc: 'Rename current session' },
+                { cmd: '/version', desc: 'Show version info' },
+                { cmd: '/diff', desc: 'Show git diff' },
+                { cmd: '/status', desc: 'Show git status' },
+                { cmd: '/mcp', desc: 'List MCP servers' },
+                { cmd: '/plugin', desc: 'List installed plugins' },
+                { cmd: '/reflect', desc: 'Start a reflection cycle' }
+            ];
+
+            var state = {
+                dropdown: null,
+                target: null,
+                options: [],
+                selectedIndex: 0
+            };
+
+            function getSlashContext(el) {
+                var text = el && typeof el.value === 'string' ? el.value : '';
+                var cursor = (el && typeof el.selectionStart === 'number') ? el.selectionStart : text.length;
+                var left = text.slice(0, cursor);
+                // Only trigger when "/" is at position 0
+                if (left.length === 0 || left.charAt(0) !== '/') return null;
+                // No spaces before cursor — user is still typing the command name
+                if (left.indexOf(' ') !== -1) return null;
+                var query = left.slice(1).toLowerCase();
+                return { query: query };
+            }
+
+            function ensureDropdown() {
+                if (state.dropdown) return state.dropdown;
+                var d = document.createElement('div');
+                d.id = 'slash-cmd-autocomplete';
+                d.style.cssText =
+                    'position:fixed;z-index:10020;display:none;min-width:220px;max-width:340px;max-height:260px;overflow-y:auto;' +
+                    'background:var(--bg-tertiary,#1e1e2e);border:1px solid var(--control-border,#45475a);border-radius:8px;' +
+                    'box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:4px;';
+                document.body.appendChild(d);
+                state.dropdown = d;
+                return d;
+            }
+
+            function hideDropdown() {
+                if (state.dropdown) state.dropdown.style.display = 'none';
+                state.target = null;
+                state.options = [];
+                state.selectedIndex = 0;
+            }
+
+            function updateDropdownPosition() {
+                if (!state.dropdown || !state.target) return;
+                var rect = state.target.getBoundingClientRect();
+                var left = Math.max(8, Math.min(rect.left, window.innerWidth - 360));
+                var spaceAbove = rect.top - 8;
+                var maxHeight = Math.min(260, Math.max(120, spaceAbove));
+                var contentHeight = state.dropdown.scrollHeight || state.dropdown.offsetHeight || 120;
+                var visibleHeight = Math.min(maxHeight, contentHeight);
+                var top = Math.max(8, rect.top - visibleHeight - 6);
+                state.dropdown.style.left = left + 'px';
+                state.dropdown.style.top = top + 'px';
+                state.dropdown.style.maxHeight = maxHeight + 'px';
+            }
+
+            function chooseOption(index) {
+                if (!state.target || !state.options[index]) return;
+                var target = state.target;
+                var cmd = state.options[index].cmd + ' ';
+                target.value = cmd;
+                var nextCursor = cmd.length;
+                target.focus();
+                target.setSelectionRange(nextCursor, nextCursor);
+                hideDropdown();
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
+            function renderDropdown() {
+                var dropdown = ensureDropdown();
+                if (!state.target || state.options.length === 0) {
+                    hideDropdown();
+                    return;
+                }
+
+                dropdown.innerHTML = '';
+                state.options.forEach(function(option, idx) {
+                    var item = document.createElement('button');
+                    item.type = 'button';
+                    item.innerHTML =
+                        '<span style="font-weight:600;color:var(--text-primary,#cdd6f4);">' +
+                        window.escapeHtml(option.cmd) + '</span>' +
+                        '<span style="margin-left:8px;color:var(--text-secondary,#bac2de);font-weight:400;">' +
+                        window.escapeHtml(option.desc) + '</span>';
+                    item.style.cssText =
+                        'display:block;width:100%;text-align:left;border:none;border-radius:6px;padding:6px 8px;' +
+                        'font-size:12px;cursor:pointer;line-height:1.25;' +
+                        (idx === state.selectedIndex
+                            ? 'background:var(--hover-bg,#313244);'
+                            : 'background:transparent;');
+                    item.addEventListener('mouseenter', function() {
+                        state.selectedIndex = idx;
+                        renderDropdown();
+                    });
+                    item.addEventListener('mousedown', function(ev) {
+                        ev.preventDefault();
+                        chooseOption(idx);
+                    });
+                    dropdown.appendChild(item);
+                });
+
+                dropdown.style.display = 'block';
+                updateDropdownPosition();
+            }
+
+            function isSlashTarget(el) {
+                if (!el || !el.matches) return false;
+                return el.matches('.input-row textarea, .card-input input');
+            }
+
+            function refreshForTarget(el) {
+                if (!isSlashTarget(el)) {
+                    hideDropdown();
+                    return;
+                }
+
+                var context = getSlashContext(el);
+                if (!context) {
+                    hideDropdown();
+                    return;
+                }
+
+                var q = context.query;
+                var filtered = COMMANDS.filter(function(c) {
+                    return c.cmd.slice(1).indexOf(q) === 0;
+                });
+
+                if (filtered.length === 0) {
+                    hideDropdown();
+                    return;
+                }
+
+                state.target = el;
+                state.options = filtered;
+                if (state.selectedIndex >= filtered.length) state.selectedIndex = 0;
+                renderDropdown();
+            }
+
+            document.addEventListener('input', function(e) {
+                if (isSlashTarget(e.target)) refreshForTarget(e.target);
+            }, true);
+
+            document.addEventListener('click', function(e) {
+                if (state.dropdown && state.dropdown.contains(e.target)) return;
+                if (isSlashTarget(e.target)) {
+                    refreshForTarget(e.target);
+                    return;
+                }
+                hideDropdown();
+            }, true);
+
+            document.addEventListener('keydown', function(e) {
+                if (!state.target || !state.dropdown || state.dropdown.style.display === 'none') return;
+                if (document.activeElement !== state.target) {
+                    hideDropdown();
+                    return;
+                }
+
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    state.selectedIndex = (state.selectedIndex + 1) % state.options.length;
+                    renderDropdown();
+                    return;
+                }
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    state.selectedIndex = (state.selectedIndex - 1 + state.options.length) % state.options.length;
+                    renderDropdown();
+                    return;
+                }
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    chooseOption(state.selectedIndex);
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    hideDropdown();
+                }
+            }, true);
+
+            window.addEventListener('resize', updateDropdownPosition);
+            window.addEventListener('scroll', updateDropdownPosition, true);
+        };
+        window.ensureSlashCommandAutocomplete();
 
         // === Full-screen image viewer with zoom/pan ===
         (function() {
