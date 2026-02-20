@@ -342,6 +342,8 @@
                 // Remove slash command ghost overlay
                 var ghost = document.getElementById(elementId + '--slash-ghost');
                 if (ghost) ghost.style.display = 'none';
+                // Hide slash command dropdown if targeting this element
+                if (window._slashHideDropdown) window._slashHideDropdown(el);
             }
         };
 
@@ -684,7 +686,7 @@
                 { cmd: '/reflect', usage: '<goal>', desc: 'Start a reflection cycle', hasArgs: true },
                 { cmd: '/rename', usage: '<name>', desc: 'Rename current session', hasArgs: true },
                 { cmd: '/sessions', desc: 'List all sessions', hasArgs: false },
-                { cmd: '/status', desc: 'Show git status', hasArgs: false },
+                { cmd: '/status', usage: '[path] [--short]', desc: 'Show git status', hasArgs: true },
                 { cmd: '/version', desc: 'Show version info', hasArgs: false }
             ];
 
@@ -774,18 +776,30 @@
 
             function getSlashContext(el) {
                 var text = el && typeof el.value === 'string' ? el.value : '';
-                var cursor = (el && typeof el.selectionStart === 'number') ? el.selectionStart : text.length;
-                var left = text.slice(0, cursor);
-                if (left.length === 0 || left.charAt(0) !== '/') return null;
+                if (text.length === 0 || text.charAt(0) !== '/') return null;
 
-                var spaceIdx = left.indexOf(' ');
+                // Use full value to determine if a command + args exists
+                var spaceIdx = text.indexOf(' ');
                 if (spaceIdx === -1) {
-                    // Still typing command name — filter mode
+                    // No space anywhere — still typing command name
+                    var cursor = (el && typeof el.selectionStart === 'number') ? el.selectionStart : text.length;
+                    var left = text.slice(0, cursor);
                     return { query: left.slice(1).toLowerCase(), mode: 'filter' };
                 }
-                // Already have a complete command — show its entry while typing args
-                var cmdPart = left.slice(0, spaceIdx).toLowerCase();
-                return { query: cmdPart.slice(1), mode: 'locked' };
+                // Space exists — check if the command portion matches a known command
+                var cmdPart = text.slice(0, spaceIdx).toLowerCase();
+                var isKnown = COMMANDS.some(function(c) { return c.cmd === cmdPart; });
+                if (isKnown) {
+                    return { query: cmdPart.slice(1), mode: 'locked' };
+                }
+                // Unknown command with space — filter by text before cursor
+                var cursor2 = (el && typeof el.selectionStart === 'number') ? el.selectionStart : text.length;
+                var left2 = text.slice(0, cursor2);
+                var spIdx = left2.indexOf(' ');
+                if (spIdx === -1) {
+                    return { query: left2.slice(1).toLowerCase(), mode: 'filter' };
+                }
+                return { query: left2.slice(0, spIdx).slice(1).toLowerCase(), mode: 'locked' };
             }
 
             function ensureDropdown() {
@@ -795,13 +809,18 @@
                 d.style.cssText =
                     'position:fixed;z-index:10020;display:none;min-width:300px;max-width:420px;max-height:360px;overflow-y:auto;' +
                     'background:var(--bg-tertiary,#1e1e2e);border:1px solid var(--control-border,#45475a);border-radius:8px;' +
-                    'box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:6px;font-size:0.9rem;';
+                    'box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:6px;font-size:0.9rem;box-sizing:border-box;';
                 document.body.appendChild(d);
+                // Prevent scrollbar/background clicks from blurring the input
+                d.addEventListener('mousedown', function(e) {
+                    if (e.target === d) e.preventDefault();
+                });
                 state.dropdown = d;
                 return d;
             }
 
             function hideDropdown() {
+                clearTimeout(state._focusoutTimer);
                 if (state.dropdown) {
                     state.dropdown.style.display = 'none';
                     state.dropdown._posValid = false;
@@ -810,23 +829,40 @@
                 state.options = [];
                 state.selectedIndex = 0;
             }
+            // Expose for clearElementValue to dismiss dropdown after send
+            window._slashHideDropdown = function(el) {
+                if (state.target === el) hideDropdown();
+            };
 
             function updateDropdownPosition() {
                 if (!state.dropdown || !state.target) return;
-                // Cache position — textarea doesn't move between keystrokes
                 var target = state.target;
-                if (state.dropdown._posTarget === target && state.dropdown._posValid) return;
+                // Invalidate cache when target changes or textarea resizes
+                var curHeight = target.offsetHeight;
+                if (state.dropdown._posTarget === target && state.dropdown._posValid
+                    && state.dropdown._posHeight === curHeight) return;
                 var rect = target.getBoundingClientRect();
                 var left = Math.max(8, Math.min(rect.left, window.innerWidth - 360));
                 var spaceAbove = rect.top - 8;
-                var maxHeight = Math.min(360, Math.max(120, spaceAbove));
-                // Anchor bottom of dropdown to top of textarea
-                var top = rect.top - 6;
-                state.dropdown.style.left = left + 'px';
-                state.dropdown.style.bottom = (window.innerHeight - top) + 'px';
-                state.dropdown.style.top = 'auto';
-                state.dropdown.style.maxHeight = maxHeight + 'px';
+                var spaceBelow = window.innerHeight - rect.bottom - 8;
+                if (spaceAbove >= 120 || spaceAbove >= spaceBelow) {
+                    // Open above (default)
+                    var maxHeight = Math.min(360, Math.max(0, spaceAbove));
+                    var top = rect.top - 6;
+                    state.dropdown.style.left = left + 'px';
+                    state.dropdown.style.bottom = (window.innerHeight - top) + 'px';
+                    state.dropdown.style.top = 'auto';
+                    state.dropdown.style.maxHeight = maxHeight + 'px';
+                } else {
+                    // Flip below when no room above
+                    var maxHeight2 = Math.min(360, Math.max(0, spaceBelow));
+                    state.dropdown.style.left = left + 'px';
+                    state.dropdown.style.top = (rect.bottom + 6) + 'px';
+                    state.dropdown.style.bottom = 'auto';
+                    state.dropdown.style.maxHeight = maxHeight2 + 'px';
+                }
                 state.dropdown._posTarget = target;
+                state.dropdown._posHeight = curHeight;
                 state.dropdown._posValid = true;
             }
 
@@ -834,20 +870,26 @@
                 if (!state.target || !state.options[index]) return;
                 var target = state.target;
                 var option = state.options[index];
+                var text = target.value || '';
+                // Find the end of the first token (command) in the full value
+                var firstSpace = text.indexOf(' ');
+                var cmdEnd = firstSpace === -1 ? text.length : firstSpace;
+                // Preserve everything after the command token (args)
+                var suffix = text.slice(cmdEnd);
                 if (option.hasArgs) {
-                    // Paste command with trailing space so user can type args
-                    target.value = option.cmd + ' ';
-                    var nextCursor = target.value.length;
+                    var newVal = option.cmd + (suffix.length === 0 ? ' ' : (suffix.charAt(0) === ' ' ? '' : ' ')) + suffix;
+                    target.value = newVal;
+                    var nextCursor = option.cmd.length + 1;
                     target.focus();
                     target.setSelectionRange(nextCursor, nextCursor);
                     hideDropdown();
                     target.dispatchEvent(new Event('input', { bubbles: true }));
                 } else {
-                    // Set value and immediately send
                     target.value = option.cmd;
                     hideDropdown();
                     target.dispatchEvent(new Event('input', { bubbles: true }));
-                    // Click the send button (sibling or nearby .send-btn)
+                    // Cancel pending rAF to prevent stale dropdown re-open before Blazor clears value
+                    if (_rafPending) { cancelAnimationFrame(_rafPending); _rafPending = 0; }
                     var container = target.closest('.input-row') || target.closest('.card-input');
                     var sendBtn = container && container.querySelector('.send-btn:not(.stop-btn)');
                     if (sendBtn) {
@@ -1004,6 +1046,17 @@
                     return;
                 }
                 hideDropdown();
+            }, true);
+
+            // Hide dropdown when input loses focus (e.g. Tab to another element)
+            document.addEventListener('focusout', function(e) {
+                if (!state.target) return;
+                clearTimeout(state._focusoutTimer);
+                state._focusoutTimer = setTimeout(function() {
+                    if (state.target && document.activeElement !== state.target) {
+                        hideDropdown();
+                    }
+                }, 100);
             }, true);
 
             document.addEventListener('keydown', function(e) {
