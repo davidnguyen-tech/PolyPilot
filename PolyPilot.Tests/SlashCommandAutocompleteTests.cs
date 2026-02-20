@@ -121,6 +121,33 @@ public class SlashCommandAutocompleteTests
     }
 
     [Fact]
+    public void ParameterlessCommands_MarkedForAutoSend()
+    {
+        var html = File.ReadAllText(IndexHtmlPath);
+        // Commands without required args should have hasArgs: false
+        var noArgs = new[] { "/help", "/clear", "/compact", "/sessions", "/version", "/status" };
+        foreach (var cmd in noArgs)
+        {
+            var pattern = $"cmd: '{cmd}',";
+            var idx = html.IndexOf(pattern, StringComparison.Ordinal);
+            Assert.True(idx >= 0, $"{cmd} not found in autocomplete list");
+            var afterCmd = html.Substring(idx, 120);
+            Assert.Contains("hasArgs: false", afterCmd);
+        }
+
+        // Commands with args should have hasArgs: true
+        var withArgs = new[] { "/new", "/rename", "/diff", "/reflect" };
+        foreach (var cmd in withArgs)
+        {
+            var pattern = $"cmd: '{cmd}',";
+            var idx = html.IndexOf(pattern, StringComparison.Ordinal);
+            Assert.True(idx >= 0, $"{cmd} not found in autocomplete list");
+            var afterCmd = html.Substring(idx, 120);
+            Assert.Contains("hasArgs: true", afterCmd);
+        }
+    }
+
+    [Fact]
     public void AutocompleteDropdown_OpensAboveInput()
     {
         // Verify the dropdown positioning code places it above the input (like VS Code command palette)
@@ -138,6 +165,7 @@ public class SlashCommandAutocompleteTests
         Assert.Contains("ArrowDown", slashSection);
         Assert.Contains("ArrowUp", slashSection);
         Assert.Contains("'Tab'", slashSection);
+        Assert.Contains("'Enter'", slashSection);
         Assert.Contains("'Escape'", slashSection);
     }
 

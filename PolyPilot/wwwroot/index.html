@@ -138,6 +138,9 @@
                     e.preventDefault();
                     // Reset height after send
                     setTimeout(function() { element.style.height = 'auto'; }, 50);
+                    // Remove slash command ghost overlay
+                    var ghost = document.getElementById(element.id + '--slash-ghost');
+                    if (ghost) ghost.style.display = 'none';
                 }
                 // Tab / Shift+Tab to cycle sessions
                 if (e.key === 'Tab' && window._tabDotNetRef) {
@@ -333,7 +336,13 @@
 
         window.clearElementValue = function(elementId) {
             var el = document.getElementById(elementId);
-            if (el) { el.value = ''; el.style.height = 'auto'; }
+            if (el) {
+                el.value = '';
+                el.style.height = 'auto';
+                // Remove slash command ghost overlay
+                var ghost = document.getElementById(elementId + '--slash-ghost');
+                if (ghost) ghost.style.display = 'none';
+            }
         };
 
         window.escapeHtml = function(str) {
@@ -665,18 +674,18 @@
             window.__slashCmdSetup = true;
 
             var COMMANDS = [
-                { cmd: '/help', desc: 'Show available commands' },
-                { cmd: '/clear', desc: 'Clear chat history' },
-                { cmd: '/compact', desc: 'Summarize conversation' },
-                { cmd: '/new', desc: 'Create a new session' },
-                { cmd: '/sessions', desc: 'List all sessions' },
-                { cmd: '/rename', desc: 'Rename current session' },
-                { cmd: '/version', desc: 'Show version info' },
-                { cmd: '/diff', desc: 'Show git diff' },
-                { cmd: '/status', desc: 'Show git status' },
-                { cmd: '/mcp', desc: 'List MCP servers' },
-                { cmd: '/plugin', desc: 'List installed plugins' },
-                { cmd: '/reflect', desc: 'Start a reflection cycle' }
+                { cmd: '/clear', desc: 'Clear chat history', hasArgs: false },
+                { cmd: '/compact', desc: 'Summarize conversation', hasArgs: false },
+                { cmd: '/diff', usage: '[args]', desc: 'Show git diff', hasArgs: true },
+                { cmd: '/help', desc: 'Show available commands', hasArgs: false },
+                { cmd: '/mcp', usage: '[show|add|edit|delete|disable|enable] [server-name] | reload', desc: 'Manage MCP servers', hasArgs: true },
+                { cmd: '/new', usage: '[name]', desc: 'Create a new session', hasArgs: true },
+                { cmd: '/plugin', usage: '[enable|disable] [plugin-name]', desc: 'Manage installed plugins', hasArgs: true },
+                { cmd: '/reflect', usage: '<goal>', desc: 'Start a reflection cycle', hasArgs: true },
+                { cmd: '/rename', usage: '<name>', desc: 'Rename current session', hasArgs: true },
+                { cmd: '/sessions', desc: 'List all sessions', hasArgs: false },
+                { cmd: '/status', desc: 'Show git status', hasArgs: false },
+                { cmd: '/version', desc: 'Show version info', hasArgs: false }
             ];
 
             var state = {
@@ -685,6 +694,76 @@
                 options: [],
                 selectedIndex: 0
             };
+
+            // Build a lookup: command name -> usage string
+            var USAGE_BY_CMD = {};
+            COMMANDS.forEach(function(c) { if (c.usage) USAGE_BY_CMD[c.cmd] = c.usage; });
+
+            function getGhostOverlay(el) {
+                if (!el || !el.id) return null;
+                var overlayId = el.id + '--slash-ghost';
+                return document.getElementById(overlayId);
+            }
+
+            function removeGhost(el) {
+                var overlay = getGhostOverlay(el);
+                if (overlay) overlay.style.display = 'none';
+            }
+
+            function showGhost(el, hintCmd) {
+                if (!el) return;
+                var match = hintCmd || null;
+                if (!match) {
+                    var text = (el.value || '').trimEnd();
+                    var m = text.match(/^(\/\w+)\s*$/);
+                    if (!m) { removeGhost(el); return; }
+                    var cmd = m[1].toLowerCase();
+                    match = COMMANDS.find(function(c) { return c.cmd === cmd && c.usage; });
+                    if (!match) { removeGhost(el); return; }
+                }
+                if (!match.usage) { removeGhost(el); return; }
+
+                var overlay = getGhostOverlay(el);
+                if (!overlay) {
+                    overlay = document.createElement('div');
+                    overlay.id = el.id + '--slash-ghost';
+                    overlay.style.cssText =
+                        'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;' +
+                        'overflow:hidden;white-space:pre-wrap;word-wrap:break-word;';
+                    var parent = el.parentNode;
+                    if (parent && getComputedStyle(parent).position === 'static') {
+                        parent.style.position = 'relative';
+                    }
+                    // Copy textarea styles once on creation
+                    var cs = getComputedStyle(el);
+                    overlay.style.padding = cs.padding;
+                    overlay.style.font = cs.font;
+                    overlay.style.lineHeight = cs.lineHeight;
+                    overlay.style.letterSpacing = cs.letterSpacing;
+                    overlay.style.borderWidth = cs.borderWidth;
+                    overlay.style.borderColor = 'transparent';
+                    overlay.style.borderStyle = cs.borderStyle;
+                    el.parentNode.appendChild(overlay);
+                }
+
+                // Only update DOM when content actually changed
+                var typed = el.value || '';
+                // Show remaining command chars + usage as ghost
+                var remainder = '';
+                if (typed.indexOf(' ') === -1 && match.cmd.indexOf(typed.toLowerCase()) === 0) {
+                    remainder = match.cmd.slice(typed.length) + ' ';
+                }
+                var ghostText = remainder + match.usage;
+                var key = typed + '|' + match.cmd;
+                if (overlay._lastKey !== key) {
+                    overlay._lastKey = key;
+                    overlay.innerHTML =
+                        '<span style="visibility:hidden;">' + window.escapeHtml(typed) + '</span>' +
+                        '<span style="color:var(--text-muted,#6c7086);">' +
+                        window.escapeHtml(ghostText) + '</span>';
+                }
+                overlay.style.display = 'block';
+            }
 
             function getSlashContext(el) {
                 var text = el && typeof el.value === 'string' ? el.value : '';
@@ -703,16 +782,19 @@
                 var d = document.createElement('div');
                 d.id = 'slash-cmd-autocomplete';
                 d.style.cssText =
-                    'position:fixed;z-index:10020;display:none;min-width:220px;max-width:340px;max-height:260px;overflow-y:auto;' +
+                    'position:fixed;z-index:10020;display:none;min-width:300px;max-width:420px;max-height:360px;overflow-y:auto;' +
                     'background:var(--bg-tertiary,#1e1e2e);border:1px solid var(--control-border,#45475a);border-radius:8px;' +
-                    'box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:4px;';
+                    'box-shadow:0 8px 24px rgba(0,0,0,0.35);padding:6px;font-size:0.9rem;';
                 document.body.appendChild(d);
                 state.dropdown = d;
                 return d;
             }
 
             function hideDropdown() {
-                if (state.dropdown) state.dropdown.style.display = 'none';
+                if (state.dropdown) {
+                    state.dropdown.style.display = 'none';
+                    state.dropdown._posValid = false;
+                }
                 state.target = null;
                 state.options = [];
                 state.selectedIndex = 0;
@@ -720,28 +802,47 @@
 
             function updateDropdownPosition() {
                 if (!state.dropdown || !state.target) return;
-                var rect = state.target.getBoundingClientRect();
+                // Cache position — textarea doesn't move between keystrokes
+                var target = state.target;
+                if (state.dropdown._posTarget === target && state.dropdown._posValid) return;
+                var rect = target.getBoundingClientRect();
                 var left = Math.max(8, Math.min(rect.left, window.innerWidth - 360));
                 var spaceAbove = rect.top - 8;
-                var maxHeight = Math.min(260, Math.max(120, spaceAbove));
+                var maxHeight = Math.min(360, Math.max(120, spaceAbove));
                 var contentHeight = state.dropdown.scrollHeight || state.dropdown.offsetHeight || 120;
                 var visibleHeight = Math.min(maxHeight, contentHeight);
                 var top = Math.max(8, rect.top - visibleHeight - 6);
                 state.dropdown.style.left = left + 'px';
                 state.dropdown.style.top = top + 'px';
                 state.dropdown.style.maxHeight = maxHeight + 'px';
+                state.dropdown._posTarget = target;
+                state.dropdown._posValid = true;
             }
 
             function chooseOption(index) {
                 if (!state.target || !state.options[index]) return;
                 var target = state.target;
-                var cmd = state.options[index].cmd + ' ';
-                target.value = cmd;
-                var nextCursor = cmd.length;
-                target.focus();
-                target.setSelectionRange(nextCursor, nextCursor);
-                hideDropdown();
-                target.dispatchEvent(new Event('input', { bubbles: true }));
+                var option = state.options[index];
+                if (option.hasArgs) {
+                    // Paste command with trailing space so user can type args
+                    target.value = option.cmd + ' ';
+                    var nextCursor = target.value.length;
+                    target.focus();
+                    target.setSelectionRange(nextCursor, nextCursor);
+                    hideDropdown();
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                    // Set value and immediately send
+                    target.value = option.cmd;
+                    hideDropdown();
+                    target.dispatchEvent(new Event('input', { bubbles: true }));
+                    // Click the send button (sibling or nearby .send-btn)
+                    var container = target.closest('.input-row') || target.closest('.card-input');
+                    var sendBtn = container && container.querySelector('.send-btn:not(.stop-btn)');
+                    if (sendBtn) {
+                        sendBtn.click();
+                    }
+                }
             }
 
             function renderDropdown() {
@@ -751,39 +852,76 @@
                     return;
                 }
 
-                dropdown.innerHTML = '';
-                state.options.forEach(function(option, idx) {
-                    var item = document.createElement('button');
-                    item.type = 'button';
-                    item.innerHTML =
-                        '<span style="font-weight:600;color:var(--text-primary,#cdd6f4);">' +
-                        window.escapeHtml(option.cmd) + '</span>' +
-                        '<span style="margin-left:8px;color:var(--text-secondary,#bac2de);font-weight:400;">' +
-                        window.escapeHtml(option.desc) + '</span>';
-                    item.style.cssText =
-                        'display:block;width:100%;text-align:left;border:none;border-radius:6px;padding:6px 8px;' +
-                        'font-size:12px;cursor:pointer;line-height:1.25;' +
-                        (idx === state.selectedIndex
-                            ? 'background:var(--hover-bg,#313244);'
-                            : 'background:transparent;');
-                    item.addEventListener('mouseenter', function() {
-                        state.selectedIndex = idx;
-                        renderDropdown();
-                    });
-                    item.addEventListener('mousedown', function(ev) {
-                        ev.preventDefault();
-                        chooseOption(idx);
-                    });
-                    dropdown.appendChild(item);
-                });
+                // Check if options changed — if same, just update selection highlight
+                var optKey = state.options.map(function(o) { return o.cmd; }).join(',');
+                var needsRebuild = dropdown._lastOptKey !== optKey;
 
+                if (needsRebuild) {
+                    dropdown._lastOptKey = optKey;
+                    dropdown._lastSel = -1;
+                    dropdown.innerHTML = '';
+                    state.options.forEach(function(option, idx) {
+                        var item = document.createElement('button');
+                        item.type = 'button';
+                        var usageHtml = option.usage
+                            ? '<span style="margin-left:4px;color:var(--text-muted,#6c7086);font-weight:400;">' +
+                              window.escapeHtml(option.usage) + '</span>'
+                            : '';
+                        item.innerHTML =
+                            '<div>' +
+                            '<span style="font-weight:600;color:var(--text-primary,#cdd6f4);">' +
+                            window.escapeHtml(option.cmd) + '</span>' +
+                            usageHtml +
+                            '</div>' +
+                            '<div style="color:var(--text-secondary,#bac2de);font-weight:400;font-size:0.8rem;margin-top:2px;">' +
+                            window.escapeHtml(option.desc) + '</div>';
+                        item.style.cssText =
+                            'display:block;width:100%;text-align:left;border:none;border-radius:6px;padding:8px 10px;' +
+                            'font-size:inherit;cursor:pointer;line-height:1.35;background:transparent;';
+                        item.addEventListener('mouseenter', function() {
+                            state.selectedIndex = idx;
+                            updateSelection(dropdown);
+                        });
+                        item.addEventListener('mousedown', function(ev) {
+                            ev.preventDefault();
+                            chooseOption(idx);
+                        });
+                        dropdown.appendChild(item);
+                    });
+                }
+
+                updateSelection(dropdown);
                 dropdown.style.display = 'block';
                 updateDropdownPosition();
             }
 
+            function updateSelection(dropdown) {
+                var sel = state.selectedIndex;
+                if (dropdown._lastSel === sel) return;
+                dropdown._lastSel = sel;
+                for (var i = 0; i < dropdown.children.length; i++) {
+                    dropdown.children[i].style.background =
+                        i === sel ? 'var(--hover-bg,#313244)' : 'transparent';
+                }
+                // Scroll selected item into view
+                var selItem = dropdown.children[sel];
+                if (selItem) {
+                    var itemTop = selItem.offsetTop;
+                    var itemBottom = itemTop + selItem.offsetHeight;
+                    if (itemBottom > dropdown.scrollTop + dropdown.clientHeight) {
+                        dropdown.scrollTop = itemBottom - dropdown.clientHeight;
+                    } else if (itemTop < dropdown.scrollTop) {
+                        dropdown.scrollTop = itemTop;
+                    }
+                }
+            }
+
             function isSlashTarget(el) {
                 if (!el || !el.matches) return false;
-                return el.matches('.input-row textarea, .card-input input');
+                // Cache result on the element to avoid repeated selector matching
+                if (el._isSlashTarget !== undefined) return el._isSlashTarget;
+                el._isSlashTarget = el.matches('.input-row textarea, .card-input input');
+                return el._isSlashTarget;
             }
 
             function refreshForTarget(el) {
@@ -814,8 +952,30 @@
                 renderDropdown();
             }
 
+            var _rafPending = 0;
+            var _lastValue = '';
             document.addEventListener('input', function(e) {
-                if (isSlashTarget(e.target)) refreshForTarget(e.target);
+                var target = e.target;
+                if (!isSlashTarget(target)) {
+                    removeGhost(target);
+                    return;
+                }
+                var val = target.value || '';
+                if (val === _lastValue) return;
+                _lastValue = val;
+                if (_rafPending) cancelAnimationFrame(_rafPending);
+                _rafPending = requestAnimationFrame(function() {
+                    _rafPending = 0;
+                    refreshForTarget(target);
+                    var dropdownVisible = state.dropdown && state.dropdown.style.display !== 'none';
+                    if (dropdownVisible && state.options.length === 1 && state.options[0].usage) {
+                        showGhost(target, state.options[0]);
+                    } else if (dropdownVisible) {
+                        removeGhost(target);
+                    } else {
+                        showGhost(target);
+                    }
+                });
             }, true);
 
             document.addEventListener('click', function(e) {
@@ -848,7 +1008,7 @@
                     renderDropdown();
                     return;
                 }
-                if (e.key === 'Tab') {
+                if (e.key === 'Tab' || e.key === 'Enter') {
                     e.preventDefault();
                     e.stopPropagation();
                     chooseOption(state.selectedIndex);
@@ -861,8 +1021,12 @@
                 }
             }, true);
 
-            window.addEventListener('resize', updateDropdownPosition);
-            window.addEventListener('scroll', updateDropdownPosition, true);
+            function invalidateAndReposition() {
+                if (state.dropdown) state.dropdown._posValid = false;
+                updateDropdownPosition();
+            }
+            window.addEventListener('resize', invalidateAndReposition);
+            window.addEventListener('scroll', invalidateAndReposition, true);
         };
         window.ensureSlashCommandAutocomplete();
 
