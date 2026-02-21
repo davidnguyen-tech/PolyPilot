@@ -244,6 +244,9 @@ public partial class CopilotService
             if (_sessions.TryGetValue(rs.Name, out var state))
             {
                 state.Info.IsProcessing = rs.IsProcessing;
+                state.Info.ProcessingStartedAt = rs.ProcessingStartedAt;
+                state.Info.ToolCallCount = rs.ToolCallCount;
+                state.Info.ProcessingPhase = rs.ProcessingPhase;
                 state.Info.MessageCount = rs.MessageCount;
                 if (!string.IsNullOrEmpty(rs.Model))
                     state.Info.Model = rs.Model;
