@@ -189,4 +189,94 @@ public class ScenarioReferenceTests
 
         Assert.Equal(ids.Count, ids.Distinct().Count());
     }
+
+    [Fact]
+    public void MultiAgentScenarios_HaveUniqueIds()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("scenarios")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("id").GetString())
+            .ToList();
+
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public void MultiAgentScenarios_IncludeSquadIntegration()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("scenarios")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("id").GetString())
+            .ToHashSet();
+
+        Assert.Contains("squad-discovery-creates-preset", ids);
+        Assert.Contains("squad-charter-becomes-system-prompt", ids);
+        Assert.Contains("squad-decisions-shared-context", ids);
+        Assert.Contains("squad-legacy-ai-team-compat", ids);
+    }
+
+    [Fact]
+    public void MultiAgentScenarios_IncludeGroupDeletion()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("scenarios")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("id").GetString())
+            .ToHashSet();
+
+        Assert.Contains("delete-group-no-contamination", ids);
+        Assert.Contains("delete-multi-agent-group-closes-sessions", ids);
+    }
+
+    [Fact]
+    public void MultiAgentScenarios_IncludeSquadWriteBack()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("scenarios")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("id").GetString())
+            .ToHashSet();
+
+        Assert.Contains("save-preset-creates-squad-dir", ids);
+        Assert.Contains("round-trip-squad-write-read", ids);
+        Assert.Contains("squad-write-sanitizes-names", ids);
+    }
+
+    [Fact]
+    public void MultiAgentScenarios_AllHaveRequiredFields()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var scenarios = doc.RootElement.GetProperty("scenarios").EnumerateArray().ToList();
+
+        Assert.NotEmpty(scenarios);
+        foreach (var s in scenarios)
+        {
+            Assert.True(s.TryGetProperty("id", out _), "Scenario missing 'id'");
+            Assert.True(s.TryGetProperty("name", out _), "Scenario missing 'name'");
+            Assert.True(s.TryGetProperty("steps", out var steps), "Scenario missing 'steps'");
+            Assert.NotEqual(0, steps.GetArrayLength());
+        }
+    }
+
+    [Fact]
+    public void MultiAgentScenarios_IncludeReflectLoopScenarios()
+    {
+        var json = File.ReadAllText(Path.Combine(ScenariosDir, "multi-agent-scenarios.json"));
+        var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("scenarios")
+            .EnumerateArray()
+            .Select(s => s.GetProperty("id").GetString())
+            .ToHashSet();
+
+        Assert.Contains("reflect-loop-completes-goal-met", ids);
+        Assert.Contains("reflect-loop-max-iterations", ids);
+        Assert.Contains("stall-detection-triggers", ids);
+    }
 }
