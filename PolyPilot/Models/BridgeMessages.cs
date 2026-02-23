@@ -91,12 +91,17 @@ public static class BridgeMessageTypes
     public const string AddRepo = "add_repo";
     public const string RemoveRepo = "remove_repo";
     public const string ListRepos = "list_repos";
+    public const string CreateWorktree = "create_worktree";
+    public const string RemoveWorktree = "remove_worktree";
 
     // Server → Client (repo responses)
     public const string ReposList = "repos_list";
     public const string RepoAdded = "repo_added";
     public const string RepoProgress = "repo_progress";
     public const string RepoError = "repo_error";
+    public const string WorktreeCreated = "worktree_created";
+    public const string WorktreeRemoved = "worktree_removed";
+    public const string WorktreeError = "worktree_error";
 
     // Server → Client (response)
     public const string DirectoriesList = "directories_list";
@@ -447,6 +452,7 @@ public class ReposListPayload
 {
     public string? RequestId { get; set; }
     public List<RepoSummary> Repos { get; set; } = new();
+    public List<WorktreeSummary> Worktrees { get; set; } = new();
 }
 
 public class RepoSummary
@@ -454,6 +460,17 @@ public class RepoSummary
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Url { get; set; } = "";
+}
+
+public class WorktreeSummary
+{
+    public string Id { get; set; } = "";
+    public string RepoId { get; set; } = "";
+    public string Branch { get; set; } = "";
+    public string Path { get; set; } = "";
+    public int? PrNumber { get; set; }
+    /// <summary>Git remote name (e.g., "origin", "upstream") if this worktree was created from a PR and the remote exists locally.</summary>
+    public string? Remote { get; set; }
 }
 
 public class RepoAddedPayload
@@ -474,6 +491,32 @@ public class RepoErrorPayload
 {
     public string RequestId { get; set; } = "";
     public string Error { get; set; } = "";
+}
+
+public class CreateWorktreePayload
+{
+    public string RequestId { get; set; } = Guid.NewGuid().ToString();
+    public string RepoId { get; set; } = "";
+    public string? BranchName { get; set; }
+    public int? PrNumber { get; set; }
+}
+
+public class RemoveWorktreePayload
+{
+    public string RequestId { get; set; } = "";
+    public string WorktreeId { get; set; } = "";
+}
+
+public class WorktreeCreatedPayload
+{
+    public string RequestId { get; set; } = "";
+    public string WorktreeId { get; set; } = "";
+    public string RepoId { get; set; } = "";
+    public string Branch { get; set; } = "";
+    public string Path { get; set; } = "";
+    public int? PrNumber { get; set; }
+    /// <summary>Git remote name (e.g., "origin", "upstream") if this worktree was created from a PR and the remote exists locally.</summary>
+    public string? Remote { get; set; }
 }
 
 public class FetchImagePayload

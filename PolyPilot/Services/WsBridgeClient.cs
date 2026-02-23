@@ -224,6 +224,8 @@ public class WsBridgeClient : IWsBridgeClient, IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<RepoAddedPayload>> _addRepoRequests = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Action<string>> _repoProgressCallbacks = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<FetchImageResponsePayload>> _fetchImageRequests = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<WorktreeCreatedPayload>> _pendingWorktreeRequests = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingWorktreeRemovals = new();
 
     public async Task<DirectoriesListPayload> ListDirectoriesAsync(string? path = null, CancellationToken ct = default)
     {
@@ -275,6 +277,43 @@ public class WsBridgeClient : IWsBridgeClient, IDisposable
 
     public async Task RequestReposAsync(CancellationToken ct = default) =>
         await SendAsync(BridgeMessage.Create(BridgeMessageTypes.ListRepos, new ListReposPayload()), ct);
+
+    public async Task<WorktreeCreatedPayload> CreateWorktreeAsync(string repoId, string? branchName, int? prNumber, CancellationToken ct = default)
+    {
+        var requestId = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<WorktreeCreatedPayload>();
+        _pendingWorktreeRequests[requestId] = tcs;
+        try
+        {
+            await SendAsync(BridgeMessage.Create(BridgeMessageTypes.CreateWorktree,
+                new CreateWorktreePayload { RequestId = requestId, RepoId = repoId, BranchName = branchName, PrNumber = prNumber }), ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMinutes(2));
+            cts.Token.Register(() => tcs.TrySetCanceled());
+            return await tcs.Task;
+        }
+        finally { _pendingWorktreeRequests.TryRemove(requestId, out _); }
+    }
+
+    public async Task RemoveWorktreeAsync(string worktreeId, CancellationToken ct = default)
+    {
+        var requestId = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<bool>();
+        _pendingWorktreeRemovals[requestId] = tcs;
+        try
+        {
+            await SendAsync(BridgeMessage.Create(BridgeMessageTypes.RemoveWorktree,
+                new RemoveWorktreePayload { RequestId = requestId, WorktreeId = worktreeId }), ct);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+            linked.Token.Register(() => tcs.TrySetCanceled());
+            await tcs.Task;
+        }
+        finally
+        {
+            _pendingWorktreeRemovals.TryRemove(requestId, out _);
+        }
+    }
 
     public async Task<FetchImageResponsePayload> FetchImageAsync(string path, CancellationToken ct = default)
     {
@@ -339,6 +378,17 @@ public class WsBridgeClient : IWsBridgeClient, IDisposable
         foreach (var kvp in _addRepoRequests)
         {
             if (_addRepoRequests.TryRemove(kvp.Key, out var tcs))
+                tcs.TrySetCanceled();
+        }
+        // Cancel any pending worktree create/remove requests
+        foreach (var kvp in _pendingWorktreeRequests)
+        {
+            if (_pendingWorktreeRequests.TryRemove(kvp.Key, out var tcs))
+                tcs.TrySetCanceled();
+        }
+        foreach (var kvp in _pendingWorktreeRemovals)
+        {
+            if (_pendingWorktreeRemovals.TryRemove(kvp.Key, out var tcs))
                 tcs.TrySetCanceled();
         }
         _repoProgressCallbacks.Clear();
@@ -617,8 +667,35 @@ public class WsBridgeClient : IWsBridgeClient, IDisposable
 
             case BridgeMessageTypes.RepoError:
                 var repoErrorPayload = msg.GetPayload<RepoErrorPayload>();
-                if (repoErrorPayload != null && _addRepoRequests.TryRemove(repoErrorPayload.RequestId, out var errTcs))
-                    errTcs.TrySetException(new InvalidOperationException(repoErrorPayload.Error));
+                if (repoErrorPayload != null)
+                {
+                    if (_addRepoRequests.TryRemove(repoErrorPayload.RequestId, out var errTcs))
+                        errTcs.TrySetException(new InvalidOperationException(repoErrorPayload.Error));
+                }
+                break;
+
+            case BridgeMessageTypes.WorktreeCreated:
+                var wtCreated = msg.GetPayload<WorktreeCreatedPayload>();
+                if (wtCreated != null && _pendingWorktreeRequests.TryRemove(wtCreated.RequestId, out var wtTcs))
+                    wtTcs.TrySetResult(wtCreated);
+                break;
+
+            case BridgeMessageTypes.WorktreeRemoved:
+                var wtRemoved = msg.GetPayload<RemoveWorktreePayload>();
+                if (wtRemoved != null && _pendingWorktreeRemovals.TryRemove(wtRemoved.RequestId, out var rmTcs))
+                    rmTcs.TrySetResult(true);
+                break;
+
+            case BridgeMessageTypes.WorktreeError:
+                var wtError = msg.GetPayload<RepoErrorPayload>();
+                if (wtError != null)
+                {
+                    // Route to create or remove pending request
+                    if (_pendingWorktreeRequests.TryRemove(wtError.RequestId, out var wtErrTcs))
+                        wtErrTcs.TrySetException(new InvalidOperationException(wtError.Error));
+                    else if (_pendingWorktreeRemovals.TryRemove(wtError.RequestId, out var rmErrTcs))
+                        rmErrTcs.TrySetException(new InvalidOperationException(wtError.Error));
+                }
                 break;
 
             case BridgeMessageTypes.FetchImageResponse:

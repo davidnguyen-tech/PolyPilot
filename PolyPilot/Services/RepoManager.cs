@@ -241,7 +241,8 @@ public class RepoManager
 
     /// <summary>
     /// Create a worktree by checking out a GitHub PR's branch.
-    /// Fetches the PR ref and creates a worktree on that branch.
+    /// Fetches the PR ref, discovers the actual branch name via gh CLI,
+    /// sets up upstream tracking, and associates the remote.
     /// </summary>
     public async Task<WorktreeInfo> CreateWorktreeFromPrAsync(string repoId, int prNumber, CancellationToken ct = default)
     {
@@ -249,15 +250,76 @@ public class RepoManager
         var repo = _state.Repositories.FirstOrDefault(r => r.Id == repoId)
             ?? throw new InvalidOperationException($"Repository '{repoId}' not found.");
 
-        // Fetch the PR ref
-        await RunGitAsync(repo.BareClonePath, ct, "fetch", "origin", $"pull/{prNumber}/head:pr-{prNumber}");
+        // Try to discover the PR's actual head branch name via gh CLI
+        string? headBranch = null;
+        string remoteName = "origin";
+        try
+        {
+            var prJson = await RunGhAsync(repo.BareClonePath, ct, "pr", "view", prNumber.ToString(), "--json", "headRefName,baseRefName,headRepository,headRepositoryOwner");
+            var prInfo = System.Text.Json.JsonDocument.Parse(prJson);
+            headBranch = prInfo.RootElement.GetProperty("headRefName").GetString();
+            Console.WriteLine($"[RepoManager] PR #{prNumber} head branch: {headBranch}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[RepoManager] Could not query PR info via gh: {ex.Message}");
+        }
+
+        // Fetch the PR ref into a local branch
+        var branchName = headBranch ?? $"pr-{prNumber}";
+        
+        // Check if the branch is already checked out in another worktree
+        if (headBranch != null)
+        {
+            try
+            {
+                var worktreeList = await RunGitAsync(repo.BareClonePath, ct, "worktree", "list", "--porcelain");
+                var branchRef = $"branch refs/heads/{headBranch}";
+                var lines = worktreeList.Split('\n');
+                if (lines.Any(line => line.Trim() == branchRef))
+                {
+                    Console.WriteLine($"[RepoManager] Branch '{headBranch}' already in use, using pr-{prNumber} instead");
+                    branchName = $"pr-{prNumber}";
+                }
+            }
+            catch { /* Non-fatal — proceed with the branch name */ }
+        }
+        
+        await RunGitAsync(repo.BareClonePath, ct, "fetch", remoteName, $"+pull/{prNumber}/head:{branchName}");
+
+        // Fetch the remote branch so refs/remotes/origin/<branch> exists for tracking
+        // The bare clone's refspec (+refs/heads/*:refs/remotes/origin/*) handles the mapping
+        if (headBranch != null)
+        {
+            try
+            {
+                await RunGitAsync(repo.BareClonePath, ct, "fetch", remoteName, headBranch);
+            }
+            catch
+            {
+                // Non-fatal — the remote branch may not exist if PR is from a fork
+            }
+        }
 
         Directory.CreateDirectory(WorktreesDir);
         var worktreeId = Guid.NewGuid().ToString()[..8];
         var worktreePath = Path.Combine(WorktreesDir, $"{repoId}-{worktreeId}");
-        var branchName = $"pr-{prNumber}";
 
         await RunGitAsync(repo.BareClonePath, ct, "worktree", "add", worktreePath, branchName);
+
+        // Set upstream tracking so push/pull work in the worktree
+        if (headBranch != null)
+        {
+            try
+            {
+                await RunGitAsync(worktreePath, ct, "branch", $"--set-upstream-to={remoteName}/{headBranch}", branchName);
+                Console.WriteLine($"[RepoManager] Set upstream tracking: {branchName} -> {remoteName}/{headBranch}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RepoManager] Could not set upstream tracking: {ex.Message}");
+            }
+        }
 
         var wt = new WorktreeInfo
         {
@@ -266,6 +328,7 @@ public class RepoManager
             Branch = branchName,
             Path = worktreePath,
             PrNumber = prNumber,
+            Remote = remoteName,
             CreatedAt = DateTime.UtcNow
         };
         _state.Worktrees.Add(wt);
@@ -309,6 +372,44 @@ public class RepoManager
     /// </summary>
     public IEnumerable<WorktreeInfo> GetWorktrees(string repoId)
         => _state.Worktrees.Where(w => w.RepoId == repoId);
+
+    /// <summary>
+    /// Add a worktree to the in-memory list (for remote mode — tracks server worktrees without running git).
+    /// </summary>
+    public void AddRemoteWorktree(WorktreeInfo wt)
+    {
+        EnsureLoaded();
+        if (!_state.Worktrees.Any(w => w.Id == wt.Id))
+            _state.Worktrees.Add(wt);
+    }
+
+    /// <summary>
+    /// Add a repo to the in-memory list (for remote mode — tracks server repos without cloning).
+    /// </summary>
+    public void AddRemoteRepo(RepositoryInfo repo)
+    {
+        EnsureLoaded();
+        if (!_state.Repositories.Any(r => r.Id == repo.Id))
+            _state.Repositories.Add(repo);
+    }
+
+    /// <summary>
+    /// Remove a worktree from the in-memory list (for remote mode — reconcile with server state).
+    /// </summary>
+    public void RemoveRemoteWorktree(string worktreeId)
+    {
+        EnsureLoaded();
+        _state.Worktrees.RemoveAll(w => w.Id == worktreeId);
+    }
+
+    /// <summary>
+    /// Remove a repo from the in-memory list (for remote mode — reconcile with server state).
+    /// </summary>
+    public void RemoveRemoteRepo(string repoId)
+    {
+        EnsureLoaded();
+        _state.Repositories.RemoveAll(r => r.Id == repoId);
+    }
 
     /// <summary>
     /// Remove a tracked repository and optionally delete its bare clone from disk.
@@ -430,6 +531,52 @@ public class RepoManager
     private static async Task<string> RunGitAsync(string? workDir, CancellationToken ct, params string[] args)
     {
         return await RunGitWithProgressAsync(workDir, null, ct, args);
+    }
+
+    /// <summary>
+    /// Run the GitHub CLI (gh) and return stdout. Uses the same PATH setup as git.
+    /// Sets GIT_DIR for bare repos so gh can discover the remote.
+    /// </summary>
+    private static async Task<string> RunGhAsync(string? workDir, CancellationToken ct, params string[] args)
+    {
+        var psi = new ProcessStartInfo("gh")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (workDir != null)
+        {
+            psi.WorkingDirectory = workDir;
+            // Bare repos need GIT_DIR set explicitly for gh to find the remote
+            if (workDir.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+                psi.Environment["GIT_DIR"] = workDir;
+        }
+        foreach (var a in args)
+            psi.ArgumentList.Add(a);
+        SetPath(psi);
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start gh process.");
+        // Read both streams concurrently to avoid deadlock if one buffer fills
+        var outputTask = proc.StandardOutput.ReadToEndAsync(ct);
+        var errorTask = proc.StandardError.ReadToEndAsync(ct);
+        try
+        {
+            await Task.WhenAll(outputTask, errorTask);
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+        var output = await outputTask;
+        var error = await errorTask;
+        await proc.WaitForExitAsync(ct);
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"gh failed (exit {proc.ExitCode}): {error}");
+        return output;
     }
 
     private static void SetPath(ProcessStartInfo psi)
