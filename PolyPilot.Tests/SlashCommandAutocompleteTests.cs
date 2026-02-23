@@ -73,6 +73,7 @@ public class SlashCommandAutocompleteTests
 
         // The "plugins" alias and "default" fallback are not shown in autocomplete — exclude them
         handler.Remove("/plugins");
+        handler.Remove("/prompts");
         // "default" is a catch-all, not a real command
         handler.ExceptWith(handler.Where(c => c == "/default").ToList());
 
@@ -143,7 +144,7 @@ public class SlashCommandAutocompleteTests
         }
 
         // Commands with args should have hasArgs: true
-        var withArgs = new[] { "/new", "/rename", "/diff", "/reflect", "/mcp", "/plugin", "/status" };
+        var withArgs = new[] { "/new", "/rename", "/diff", "/reflect", "/mcp", "/plugin", "/prompt", "/status" };
         foreach (var cmd in withArgs)
         {
             var pattern = $"cmd: '{cmd}',";
