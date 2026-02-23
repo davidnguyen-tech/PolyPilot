@@ -85,7 +85,7 @@ public class WsBridgeServer : IDisposable
         if (_copilot != null) return;
         _copilot = copilot;
 
-        _copilot.OnStateChanged += () => BroadcastSessionsList();
+        _copilot.OnStateChanged += () => { BroadcastSessionsList(); BroadcastOrganizationState(); };
         _copilot.OnContentReceived += (session, content) =>
             Broadcast(BridgeMessage.Create(BridgeMessageTypes.ContentDelta,
                 new ContentDeltaPayload { SessionName = session, Content = content }));
@@ -379,7 +379,16 @@ public class WsBridgeServer : IDisposable
                     if (sendReq != null && !string.IsNullOrWhiteSpace(sendReq.SessionName) && !string.IsNullOrWhiteSpace(sendReq.Message))
                     {
                         Console.WriteLine($"[WsBridge] Client sending message to '{sendReq.SessionName}'");
-                        await _copilot.SendPromptAsync(sendReq.SessionName, sendReq.Message, cancellationToken: ct);
+                        // Fire-and-forget: don't block the client message loop waiting for the full response.
+                        // SendPromptAsync awaits ResponseCompletion (minutes). Responses stream back via events.
+                        // Blocking here prevents the client from sending abort, switch, or other commands.
+                        var sendSession = sendReq.SessionName;
+                        var sendMessage = sendReq.Message;
+                        _ = Task.Run(async () =>
+                        {
+                            try { await _copilot.SendPromptAsync(sendSession, sendMessage, cancellationToken: ct); }
+                            catch (Exception ex) { Console.WriteLine($"[WsBridge] SendPromptAsync error for '{sendSession}': {ex.Message}"); }
+                        });
                     }
                     break;
 
