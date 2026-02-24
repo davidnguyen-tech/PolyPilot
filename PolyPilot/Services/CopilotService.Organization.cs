@@ -61,6 +61,8 @@ public partial class CopilotService
         }
 
         SaveOrganization();
+        FlushSaveOrganization();
+        FlushSaveActiveSessionsToDisk();
         OnStateChanged?.Invoke();
         return group.Id;
     }
@@ -108,7 +110,9 @@ public partial class CopilotService
             });
         }
 
-        ReconcileOrganization();
+        // NOTE: Do NOT call ReconcileOrganization() here — _sessions is empty at load time,
+        // so reconciliation would prune all session metadata. Reconcile is called explicitly
+        // after RestorePreviousSessionsAsync populates _sessions (line 403 and 533).
     }
 
     public void SaveOrganization()
@@ -147,7 +151,10 @@ public partial class CopilotService
         try
         {
             Directory.CreateDirectory(PolyPilotBaseDir);
-            File.WriteAllText(OrganizationFile, json);
+            // Atomic write: write to temp file then rename to prevent corruption on crash
+            var tempFile = OrganizationFile + ".tmp";
+            File.WriteAllText(tempFile, json);
+            File.Move(tempFile, OrganizationFile, overwrite: true);
         }
         catch (Exception ex)
         {
@@ -164,6 +171,23 @@ public partial class CopilotService
     internal void ReconcileOrganization()
     {
         var activeNames = _sessions.Where(kv => !kv.Value.Info.IsHidden).Select(kv => kv.Key).ToHashSet();
+
+        // Safety: skip reconciliation during startup when sessions haven't been restored yet.
+        // LoadOrganization loads the org before RestorePreviousSessionsAsync populates _sessions,
+        // so reconciling then would prune all sessions. Use IsRestoring as the precise scope guard.
+        if (IsRestoring)
+        {
+            Debug("ReconcileOrganization: skipping — session restore in progress");
+            return;
+        }
+        // Pre-initialization guard: before RestorePreviousSessionsAsync runs, _sessions is empty
+        // but Organization.Sessions still has metadata from disk. Don't prune in this window.
+        // After initialization completes, zero active sessions means the user closed everything — allow cleanup.
+        if (!IsInitialized && activeNames.Count == 0 && Organization.Sessions.Count > 0)
+        {
+            Debug("ReconcileOrganization: skipping — not yet initialized and no active sessions");
+            return;
+        }
         
         // Quick check: skip if active session set hasn't changed (order-independent additive hash)
         var currentHash = activeNames.Count;
@@ -254,7 +278,7 @@ public partial class CopilotService
         // Ensure every tracked repo has a sidebar group (even if no sessions exist yet)
         foreach (var repo in _repoManager.Repositories)
         {
-            if (!Organization.Groups.Any(g => g.RepoId == repo.Id))
+            if (!Organization.Groups.Any(g => g.RepoId == repo.Id && !g.IsMultiAgent))
             {
                 GetOrCreateRepoGroup(repo.Id, repo.Name);
                 changed = true;
@@ -289,11 +313,22 @@ public partial class CopilotService
             return;
         }
 
+        // Protect multi-agent group sessions from pruning — they may not yet be in
+        // active-sessions.json if the app was killed before the debounce timer fired.
+        // The authoritative source for these sessions is organization.json itself.
+        var protectedNames = new HashSet<string>(
+            Organization.Sessions
+                .Where(m => multiAgentGroupIds.Contains(m.GroupId))
+                .Select(m => m.SessionName));
+
         // Remove metadata only for sessions that are truly gone (not in any known set)
-        var toRemove = Organization.Sessions.Where(m => !knownNames.Contains(m.SessionName)).ToList();
+        var toRemove = Organization.Sessions.Where(m => !knownNames.Contains(m.SessionName) && !protectedNames.Contains(m.SessionName)).ToList();
         if (toRemove.Count > 0)
+        {
             Debug($"ReconcileOrganization: pruning {toRemove.Count} sessions: {string.Join(", ", toRemove.Select(m => m.SessionName))}");
-        Organization.Sessions.RemoveAll(m => !knownNames.Contains(m.SessionName));
+            changed = true;
+        }
+        Organization.Sessions.RemoveAll(m => !knownNames.Contains(m.SessionName) && !protectedNames.Contains(m.SessionName));
 
         if (changed) SaveOrganization();
     }
@@ -351,6 +386,7 @@ public partial class CopilotService
         {
             group.Name = name;
             SaveOrganization();
+            FlushSaveOrganization();
             OnStateChanged?.Invoke();
         }
     }
@@ -386,6 +422,7 @@ public partial class CopilotService
             // Persist immediately so hidden sessions are excluded if app restarts
             // before the fire-and-forget CloseSessionAsync completes
             SaveActiveSessionsToDisk();
+            FlushSaveActiveSessionsToDisk();
             // Fire-and-forget: close sessions asynchronously
             _ = Task.Run(async () =>
             {
@@ -404,6 +441,7 @@ public partial class CopilotService
 
         Organization.Groups.RemoveAll(g => g.Id == groupId);
         SaveOrganization();
+        FlushSaveOrganization();
         OnStateChanged?.Invoke();
     }
 
@@ -521,7 +559,9 @@ public partial class CopilotService
     /// </summary>
     public SessionGroup GetOrCreateRepoGroup(string repoId, string repoName)
     {
-        var existing = Organization.Groups.FirstOrDefault(g => g.RepoId == repoId);
+        // Skip multi-agent groups — they have a RepoId for worktree context but are
+        // not the "repo group" that regular sessions should auto-join.
+        var existing = Organization.Groups.FirstOrDefault(g => g.RepoId == repoId && !g.IsMultiAgent);
         if (existing != null) return existing;
 
         var group = new SessionGroup
@@ -573,7 +613,11 @@ public partial class CopilotService
             }
         }
 
+        // Multi-agent group creation is a critical structural change — flush immediately
+        // instead of relying on the 2s debounce. If the process is killed (e.g., relaunch),
+        // the debounce timer never fires and the group is lost on restart.
         SaveOrganization();
+        FlushSaveOrganization();
         OnStateChanged?.Invoke();
         return group;
     }
@@ -783,6 +827,7 @@ public partial class CopilotService
 
         // Phase 2: Parse task assignments from orchestrator response
         var rawAssignments = ParseTaskAssignments(planResponse, workerNames);
+        Debug($"[DISPATCH] '{orchestratorName}' plan parsed: {rawAssignments.Count} raw assignments from {workerNames.Count} workers. Response length={planResponse.Length}");
         // Deduplicate: merge multiple tasks for the same worker into one prompt
         var assignments = rawAssignments
             .GroupBy(a => a.WorkerName, StringComparer.OrdinalIgnoreCase)
@@ -791,12 +836,14 @@ public partial class CopilotService
         if (assignments.Count == 0)
         {
             // Orchestrator handled it without delegation — add a system note
+            Debug($"[DISPATCH] No assignments parsed from response (length={planResponse.Length}). Workers: {string.Join(", ", workerNames)}");
             AddOrchestratorSystemMessage(orchestratorName, "ℹ️ Orchestrator handled the request directly (no tasks delegated to workers).");
             InvokeOnUI(() => OnOrchestratorPhaseChanged?.Invoke(groupId, OrchestratorPhase.Complete, null));
             return;
         }
 
         // Phase 3: Dispatch tasks to workers in parallel
+        Debug($"[DISPATCH] Dispatching {assignments.Count} tasks: {string.Join(", ", assignments.Select(a => a.WorkerName))}");
         InvokeOnUI(() => OnOrchestratorPhaseChanged?.Invoke(groupId, OrchestratorPhase.Dispatching,
             $"Sending tasks to {assignments.Count} worker(s)"));
 
@@ -911,11 +958,14 @@ public partial class CopilotService
 
         try
         {
+            Debug($"[DISPATCH] Worker '{workerName}' starting (prompt len={workerPrompt.Length})");
             var response = await SendPromptAndWaitAsync(workerName, workerPrompt, cancellationToken);
+            Debug($"[DISPATCH] Worker '{workerName}' completed (response len={response.Length}, elapsed={sw.Elapsed.TotalSeconds:F1}s)");
             return new WorkerResult(workerName, response, true, null, sw.Elapsed);
         }
         catch (Exception ex)
         {
+            Debug($"[DISPATCH] Worker '{workerName}' FAILED: {ex.GetType().Name}: {ex.Message} (elapsed={sw.Elapsed.TotalSeconds:F1}s)");
             return new WorkerResult(workerName, null, false, ex.Message, sw.Elapsed);
         }
     }
@@ -1024,17 +1074,22 @@ public partial class CopilotService
     /// <summary>
     /// Create a multi-agent group from a preset template, creating sessions with assigned models.
     /// </summary>
-    public async Task<SessionGroup?> CreateGroupFromPresetAsync(Models.GroupPreset preset, string? workingDirectory = null, string? worktreeId = null, string? repoId = null, CancellationToken ct = default)
+    public async Task<SessionGroup?> CreateGroupFromPresetAsync(Models.GroupPreset preset, string? workingDirectory = null, string? worktreeId = null, string? repoId = null, string? nameOverride = null, CancellationToken ct = default)
     {
-        var group = CreateMultiAgentGroup(preset.Name, preset.Mode, worktreeId: worktreeId, repoId: repoId);
+        var teamName = nameOverride ?? preset.Name;
+        var group = CreateMultiAgentGroup(teamName, preset.Mode, worktreeId: worktreeId, repoId: repoId);
         if (group == null) return null;
 
         // Store Squad context (routing, decisions) on the group for use during orchestration
         group.SharedContext = preset.SharedContext;
         group.RoutingContext = preset.RoutingContext;
 
-        // Create orchestrator session
-        var orchName = $"{preset.Name}-orchestrator";
+        // Create orchestrator session (with uniqueness check matching CreateMultiAgentGroupAsync)
+        var orchName = $"{teamName}-orchestrator";
+        { int suffix = 1;
+          while (_sessions.ContainsKey(orchName) || Organization.Sessions.Any(s => s.SessionName == orchName))
+              orchName = $"{teamName}-orchestrator-{suffix++}";
+        }
         try
         {
             await CreateSessionAsync(orchName, preset.OrchestratorModel, workingDirectory, ct);
@@ -1047,16 +1102,20 @@ public partial class CopilotService
         MoveSession(orchName, group.Id);
         SetSessionRole(orchName, MultiAgentRole.Orchestrator);
         SetSessionPreferredModel(orchName, preset.OrchestratorModel);
-        if (worktreeId != null)
-        {
-            var meta = GetSessionMeta(orchName);
-            if (meta != null) meta.WorktreeId = worktreeId;
-        }
+        // Pin orchestrator so it sorts to the top of the group
+        var orchMeta = GetSessionMeta(orchName);
+        if (orchMeta != null) orchMeta.IsPinned = true;
+        if (worktreeId != null && orchMeta != null)
+            orchMeta.WorktreeId = worktreeId;
 
         // Create worker sessions
         for (int i = 0; i < preset.WorkerModels.Length; i++)
         {
-            var workerName = $"{preset.Name}-worker-{i + 1}";
+            var workerName = $"{teamName}-worker-{i + 1}";
+            { int suffix = 1;
+              while (_sessions.ContainsKey(workerName) || Organization.Sessions.Any(s => s.SessionName == workerName))
+                  workerName = $"{teamName}-worker-{i + 1}-{suffix++}";
+            }
             var workerModel = preset.WorkerModels[i];
             try
             {
@@ -1080,6 +1139,14 @@ public partial class CopilotService
         }
 
         SaveOrganization();
+        // Multi-agent group creation is a critical structural change — flush immediately
+        // instead of relying on the 2s debounce. If the process is killed (e.g., relaunch),
+        // the debounce timer never fires and the group is lost on restart.
+        FlushSaveOrganization();
+        // Also flush active-sessions.json so the new sessions are known on restart.
+        // Without this, ReconcileOrganization prunes the squad sessions from org
+        // because they're not in active-sessions.json yet (still waiting on 2s debounce).
+        FlushSaveActiveSessionsToDisk();
         OnStateChanged?.Invoke();
         return group;
     }

@@ -96,6 +96,8 @@
                 {
                     <span class="phase-indicator">@PhaseLabel(expPhase.Phase, expPhase.Detail)</span>
                 }
+                @if (expandedGroup.OrchestratorMode != MultiAgentMode.Orchestrator && expandedGroup.OrchestratorMode != MultiAgentMode.OrchestratorReflect)
+                {
                 <input type="text" id="ma-input-expanded-@expandedGroupId" class="ma-expanded-toolbar-input"
                        placeholder="@GetInputPlaceholder(expandedGroup.OrchestratorMode)"
                        @onkeydown="@(async (KeyboardEventArgs e) => { if (e.Key == "Enter") await SendToExpandedMultiAgentGroup(expandedGroupId); })"
@@ -103,6 +105,7 @@
                 <button class="ma-send-btn" @onclick="() => SendToExpandedMultiAgentGroup(expandedGroupId)" @onclick:stopPropagation="true">
                     📡 Send All
                 </button>
+                }
             </div>
         }
         @* Keep-alive: render all active sessions, JS owns 'active' class for instant switching *@
@@ -110,7 +113,7 @@
         {
             <KeepAliveSession Id="@($"slot-{session.Name.Replace(" ", "-")}")"
                               IsVisible="@(session.Name == expandedSession)"
-                              WarmWhenHidden="@(session.IsProcessing && (streamingBySession.ContainsKey(session.Name) || currentToolBySession.ContainsKey(session.Name) || activityBySession.ContainsKey(session.Name)))"
+                              WarmWhenHidden="@(completedSessions.Contains(session.Name) || (session.IsProcessing && (streamingBySession.ContainsKey(session.Name) || currentToolBySession.ContainsKey(session.Name) || activityBySession.ContainsKey(session.Name))))"
                               HiddenWarmIntervalMs="250"
                               @key="session.Name">
                 <ExpandedSessionView Session="session"
@@ -256,22 +259,27 @@
             {
                 @if (group.IsMultiAgent && showGroupHeaders)
                 {
-                    <div class="multi-agent-input-bar" @onclick:stopPropagation="true">
-                        @if (group.OrchestratorMode == MultiAgentMode.OrchestratorReflect)
-                        {
+                    @if (group.OrchestratorMode == MultiAgentMode.OrchestratorReflect)
+                    {
+                        <div class="multi-agent-input-bar" @onclick:stopPropagation="true">
                             <span class="reflect-iter-inline">
                                 <label>Iterations:</label>
                                 <input type="number" min="1" max="100" value="@GetMaxIterations(group.Id)"
                                        @onchange="(e) => SetMaxIterations(group.Id, e)"
                                        @onclick:stopPropagation="true" class="reflect-iter-input" />
                             </span>
-                        }
+                        </div>
+                    }
+                    else if (group.OrchestratorMode != MultiAgentMode.Orchestrator)
+                    {
+                    <div class="multi-agent-input-bar" @onclick:stopPropagation="true">
                         <textarea id="ma-input-@group.Id" class="ma-broadcast-input" placeholder="@GetInputPlaceholder(group.OrchestratorMode)"
                                   rows="1"></textarea>
                         <button class="ma-send-btn" @onclick="() => SendToMultiAgentGroup(group.Id)" title="Send to all sessions">
                             📡 Send All
                         </button>
                     </div>
+                    }
                 }
                 <div class="session-grid @(isCompactGrid ? "" : "expanded-grid")">
                 @foreach (var session in groupSessions)
@@ -781,6 +789,7 @@
     private Timer? _renderTimer;
     private long _switchCooldownUntil; // TickCount64 value: suppress renders until this time
     private readonly RenderThrottle _refreshThrottle = new(500);
+    private long _lastDraftCaptureTickMs; // TickCount64 of last JS draft-capture eval
 
     private void ScheduleRender()
     {
@@ -804,8 +813,16 @@
             return;
         }
 
-        // During a session switch, drafts were already saved — skip the expensive JS round-trip
-        if (!_sessionSwitching)
+        // During a session switch, drafts were already saved — skip the expensive JS round-trip.
+        // Also debounce: only capture drafts every 3s to avoid flooding the WebView JS bridge
+        // during multi-agent event bursts (10+ sessions firing events at 50ms intervals).
+        // The JS interop round-trip blocks the Blazor render pipeline, causing "stuck thinking" UI.
+        var nowTicks = Environment.TickCount64;
+        var lastCapture = Interlocked.Read(ref _lastDraftCaptureTickMs);
+        var shouldCaptureDrafts = !_sessionSwitching 
+            && completedSessions.Count == 0
+            && (nowTicks - lastCapture) >= 3000;
+        if (shouldCaptureDrafts)
         {
             // Capture all card input values before re-render wipes them
             try
@@ -844,6 +861,7 @@
                 }
             }
             catch { }
+            Interlocked.Exchange(ref _lastDraftCaptureTickMs, Environment.TickCount64);
         }
         _sessionSwitching = false;
         StateHasChanged();
@@ -941,14 +959,14 @@
     private void HandleComplete(string sessionName, string summary)
     {
         // Already on UI thread (called from CompleteResponse via Invoke/SynchronizationContext.Post).
-        // Must be synchronous — InvokeAsync defers and causes stale renders.
+        // Must be synchronous — InvokeAsync defers and causes stale renders (INV-8).
         if (_disposed) return;
         completedSessions.Add(sessionName);
         streamingBySession.Remove(sessionName);
         activityBySession.Remove(sessionName);
         sessions = CopilotService.GetAllSessions().ToList();
         StateHasChanged();
-        // This callback runs on thread-pool — DOES need InvokeAsync.
+        // Clear the completed badge after 10 seconds
         _ = Task.Delay(10000).ContinueWith(_ =>
             InvokeAsync(() =>
             {
@@ -1218,6 +1236,31 @@
 
         try
         {
+            // Route orchestrator session messages through the multi-agent pipeline
+            // so typing in the orchestrator chat dispatches to workers automatically.
+            var sessionMeta = CopilotService.GetSessionMeta(sessionName);
+            var group = sessionMeta?.GroupId != null
+                ? CopilotService.Organization.Groups.FirstOrDefault(g => g.Id == sessionMeta.GroupId)
+                : null;
+            var isOrchestrator = group is { IsMultiAgent: true }
+                && (group.OrchestratorMode == MultiAgentMode.Orchestrator || group.OrchestratorMode == MultiAgentMode.OrchestratorReflect)
+                && CopilotService.GetOrchestratorSession(group.Id) == sessionName;
+
+            if (isOrchestrator && (imagePaths == null || imagePaths.Count == 0))
+            {
+                _ = CopilotService.SendToMultiAgentGroupAsync(group!.Id, finalPrompt).ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        InvokeAsync(() =>
+                        {
+                            Console.WriteLine($"Error sending to multi-agent group: {t.Exception?.InnerException?.Message}");
+                        });
+                    }
+                });
+            }
+            else
+            {
             _ = CopilotService.SendPromptAsync(sessionName, finalPrompt, imagePaths, agentMode: agentMode).ContinueWith(t =>
             {
                 if (t.IsFaulted)
@@ -1228,6 +1271,7 @@
                     });
                 }
             });
+            }
         }
         catch (Exception ex)
         {

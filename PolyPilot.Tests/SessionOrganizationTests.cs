@@ -1093,6 +1093,19 @@ public class GroupPresetTests
     {
         Assert.Contains(GroupPreset.BuiltIn, p => p.Mode == MultiAgentMode.OrchestratorReflect);
     }
+
+    [Fact]
+    public void BuiltInPresets_IncludePRReviewSquad()
+    {
+        var prSquad = GroupPreset.BuiltIn.FirstOrDefault(p => p.Name == "PR Review Squad");
+        Assert.NotNull(prSquad);
+        Assert.Equal(5, prSquad!.WorkerModels.Length);
+        Assert.Equal(MultiAgentMode.Orchestrator, prSquad.Mode);
+        Assert.NotNull(prSquad.SharedContext);
+        Assert.NotNull(prSquad.RoutingContext);
+        Assert.NotNull(prSquad.WorkerSystemPrompts);
+        Assert.Equal(prSquad.WorkerModels.Length, prSquad.WorkerSystemPrompts!.Length);
+    }
 }
 
 public class GroupModelAnalyzerTests
@@ -1495,7 +1508,7 @@ public class MultiAgentScenarioTests
     /// 
     /// User flow:
     ///   1. Click 🚀 Preset in sidebar toolbar
-    ///   2. Preset picker appears showing 4 built-in templates
+    ///   2. Preset picker appears showing 5 built-in templates
     ///   3. Select "Code Review Team" (🔍)
     ///   4. System creates: Orchestrator (claude-opus-4.6) + 2 Workers (gpt-5.1-codex, claude-sonnet-4.5)
     ///   5. Sidebar shows group with mode selector set to "🎯 Orchestrator"
@@ -1506,7 +1519,7 @@ public class MultiAgentScenarioTests
     {
         // Step 1-2: User sees built-in presets
         var presets = GroupPreset.BuiltIn;
-        Assert.Equal(4, presets.Length);
+        Assert.Equal(5, presets.Length);
 
         // Step 3: User picks "Code Review Team"
         var codeReview = presets.First(p => p.Name == "Code Review Team");
@@ -2180,6 +2193,34 @@ public class WorktreeTeamAssociationTests
     }
 
     [Fact]
+    public async Task CreateGroupFromPresetAsync_PinsOrchestratorSession()
+    {
+        var svc = CreateService();
+        var preset = new GroupPreset(
+            Name: "Pin Test",
+            Emoji: "📌",
+            Description: "Test orchestrator pinning",
+            OrchestratorModel: "claude-opus-4.6",
+            WorkerModels: new[] { "gpt-4.1", "claude-sonnet-4.5" },
+            Mode: MultiAgentMode.Orchestrator
+        );
+
+        var group = await svc.CreateGroupFromPresetAsync(preset);
+
+        Assert.NotNull(group);
+        var orchMeta = svc.Organization.Sessions
+            .FirstOrDefault(m => m.SessionName == "Pin Test-orchestrator");
+        Assert.NotNull(orchMeta);
+        Assert.True(orchMeta!.IsPinned, "Orchestrator should be pinned on creation");
+        Assert.Equal(MultiAgentRole.Orchestrator, orchMeta.Role);
+
+        // Workers should NOT be pinned
+        var workers = svc.Organization.Sessions
+            .Where(m => m.SessionName.StartsWith("Pin Test-worker-"));
+        Assert.All(workers, w => Assert.False(w.IsPinned));
+    }
+
+    [Fact]
     public void OrchestratorReflectMode_RoundTripsViaJson()
     {
         var state = new OrganizationState();
@@ -2292,6 +2333,26 @@ public class GroupingStabilityTests
         foreach (var name in sessionNames)
             cache[name] = name;
         field.SetValue(svc, cache);
+    }
+
+    /// <summary>
+    /// Injects dummy SessionState entries into _sessions so ReconcileOrganization
+    /// doesn't hit the zero-session early-return guard.
+    /// </summary>
+    private static void AddDummySessions(CopilotService svc, params string[] names)
+    {
+        var sessionsField = typeof(CopilotService).GetField("_sessions",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var dict = sessionsField.GetValue(svc)!;
+        var stateType = sessionsField.FieldType.GenericTypeArguments[1]; // SessionState
+
+        foreach (var name in names)
+        {
+            var info = new AgentSessionInfo { Name = name, Model = "test-model" };
+            var state = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(stateType);
+            stateType.GetProperty("Info")!.SetValue(state, info);
+            dict.GetType().GetMethod("TryAdd")!.Invoke(dict, new[] { name, state });
+        }
     }
 
     // --- Multi-agent group JSON round-trip tests ---
@@ -2481,6 +2542,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "team-orch", "team-w1");
+        AddDummySessions(svc, "team-orch", "team-w1");
 
         // Run reconciliation — sessions should stay in multi-agent group
         svc.ReconcileOrganization();
@@ -2518,6 +2580,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "orphan-orch", "orphan-worker");
+        AddDummySessions(svc, "orphan-orch", "orphan-worker");
 
         svc.ReconcileOrganization();
 
@@ -2564,6 +2627,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "team-orch", "team-worker");
+        AddDummySessions(svc, "team-orch", "team-worker");
 
         svc.ReconcileOrganization();
 
@@ -2604,6 +2668,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "regular-session");
+        AddDummySessions(svc, "regular-session");
         svc.ReconcileOrganization();
 
         // Session should still exist (not pruned)
@@ -2946,6 +3011,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "ghost-1", "ghost-2");
+        AddDummySessions(svc, "ghost-1", "ghost-2");
 
         svc.ReconcileOrganization();
 
@@ -2978,6 +3044,7 @@ public class GroupingStabilityTests
         });
 
         RegisterKnownSessions(svc, "stable-orch", "stable-w1");
+        AddDummySessions(svc, "stable-orch", "stable-w1");
 
         var orchGroupBefore = svc.Organization.Sessions.First(s => s.SessionName == "stable-orch").GroupId;
         var workerGroupBefore = svc.Organization.Sessions.First(s => s.SessionName == "stable-w1").GroupId;
