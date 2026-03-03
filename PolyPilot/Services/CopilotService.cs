@@ -1941,7 +1941,6 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                     if (IsConnectionError(ex))
                     {
                         Debug("Connection error detected, recreating client before session reconnect...");
-                        try { await _client.DisposeAsync(); } catch { }
                         var connSettings = ConnectionSettings.Load();
                         if (CurrentMode == ConnectionMode.Persistent &&
                             !_serverManager.CheckServerRunning("127.0.0.1", connSettings.Port))
@@ -1954,6 +1953,9 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                                 throw;
                             }
                         }
+                        // Dispose old client AFTER server check succeeds — avoids leaving
+                        // _client disposed but not nulled if server restart fails.
+                        try { await _client.DisposeAsync(); } catch { }
                         try
                         {
                             _client = CreateClient(connSettings);
