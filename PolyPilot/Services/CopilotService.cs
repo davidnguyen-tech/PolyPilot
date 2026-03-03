@@ -1512,6 +1512,7 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                 await _client.StartAsync(cancellationToken);
                 Debug("Connection recovered, retrying session creation...");
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception clientEx)
             {
                 Debug($"Failed to recreate client during recovery: {clientEx.Message}");
@@ -1962,6 +1963,7 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                             await _client.StartAsync(cancellationToken);
                             Debug("Client recreated successfully");
                         }
+                        catch (OperationCanceledException) { throw; }
                         catch (Exception clientEx)
                         {
                             Debug($"Failed to recreate client: {clientEx.Message}");
