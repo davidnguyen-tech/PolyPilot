@@ -1947,11 +1947,27 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                             !_serverManager.CheckServerRunning("127.0.0.1", connSettings.Port))
                         {
                             Debug("Persistent server not running, restarting...");
-                            await _serverManager.StartServerAsync(connSettings.Port);
+                            var started = await _serverManager.StartServerAsync(connSettings.Port);
+                            if (!started)
+                            {
+                                Debug("Failed to restart persistent server");
+                                throw;
+                            }
                         }
-                        _client = CreateClient(connSettings);
-                        await _client.StartAsync(cancellationToken);
-                        Debug("Client recreated successfully");
+                        try
+                        {
+                            _client = CreateClient(connSettings);
+                            await _client.StartAsync(cancellationToken);
+                            Debug("Client recreated successfully");
+                        }
+                        catch (Exception clientEx)
+                        {
+                            Debug($"Failed to recreate client: {clientEx.Message}");
+                            try { if (_client != null) await _client.DisposeAsync(); } catch { }
+                            _client = null;
+                            IsInitialized = false;
+                            throw;
+                        }
                     }
 
                     var reconnectModel = Models.ModelHelper.NormalizeToSlug(state.Info.Model);
