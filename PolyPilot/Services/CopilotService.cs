@@ -1533,6 +1533,9 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                     if (!started)
                     {
                         Debug("Failed to restart persistent server");
+                        try { if (_client != null) await _client.DisposeAsync(); } catch { }
+                        _client = null;
+                        IsInitialized = false;
                         _sessions.TryRemove(name, out _);
                         Organization.Sessions.RemoveAll(m => m.SessionName == name);
                         _activeSessionName = previousActiveSessionName;
@@ -2027,11 +2030,12 @@ ALWAYS run the relaunch script as the final step after making changes to this pr
                             if (!started)
                             {
                                 Debug("Failed to restart persistent server");
+                                try { await _client.DisposeAsync(); } catch { }
+                                _client = null;
+                                IsInitialized = false;
                                 throw;
                             }
                         }
-                        // Dispose old client AFTER server check succeeds — avoids leaving
-                        // _client disposed but not nulled if server restart fails.
                         try { await _client.DisposeAsync(); } catch { }
                         try
                         {
