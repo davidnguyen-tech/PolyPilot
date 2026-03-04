@@ -113,7 +113,8 @@
         else
         {
             var _hasOutput = Message.IsComplete && !string.IsNullOrEmpty(Message.Content) && !ChatMessageList.IsUnusableResult(Message.Content);
-            var _canExpand = _hasOutput || !string.IsNullOrEmpty(Message.ToolInput);
+            var _hasExpandableInput = Message.ToolName == "bash" && !string.IsNullOrEmpty(Message.ToolInput);
+            var _canExpand = _hasOutput || _hasExpandableInput;
             @* Unified command box: header + input always visible, output collapsible *@
             <div class="action-box @(ChatMessageList.GetActionLabel(Message.ToolName ?? "").CssClass) @(Message.IsComplete ? (Message.IsSuccess ? "done" : "failed") : "running")">
                 <div class="action-header @(_canExpand ? "expandable" : "")"

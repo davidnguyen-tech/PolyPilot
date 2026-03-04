@@ -15,9 +15,10 @@ public class ToolCallExpandTests
            && !string.IsNullOrEmpty(msg.Content)
            && !IsUnusableResult(msg.Content);
 
-    // Mirrors ChatMessageItem.razor line 116
+    // Mirrors ChatMessageItem.razor line 116-117
+    // Only bash tools get input-based expansion (non-bash already show input inline)
     private static bool CanExpand(ChatMessage msg)
-        => HasOutput(msg) || !string.IsNullOrEmpty(msg.ToolInput);
+        => HasOutput(msg) || (msg.ToolName == "bash" && !string.IsNullOrEmpty(msg.ToolInput));
 
     // Mirrors the else-if rendering condition: show full input only for bash
     // (non-bash tools already show input in the always-visible action-input section)
@@ -98,19 +99,21 @@ public class ToolCallExpandTests
     }
 
     [Fact]
-    public void RunningEditCommand_WithToolInput_CanExpand()
+    public void RunningEditCommand_WithToolInput_NotExpandable()
     {
+        // Non-bash tools show input inline, so no expand needed
         var msg = ChatMessage.ToolCallMessage("edit", "call-2", "{\"path\":\"/src/file.cs\",\"old_str\":\"foo\",\"new_str\":\"bar\"}");
         Assert.False(msg.IsComplete);
-        Assert.True(CanExpand(msg));
+        Assert.False(CanExpand(msg));
     }
 
     [Fact]
-    public void RunningGrepCommand_WithToolInput_CanExpand()
+    public void RunningGrepCommand_WithToolInput_NotExpandable()
     {
+        // Non-bash tools show input inline, so no expand needed
         var msg = ChatMessage.ToolCallMessage("grep", "call-3", "{\"pattern\":\"TODO\",\"path\":\"src/\"}");
         Assert.False(msg.IsComplete);
-        Assert.True(CanExpand(msg));
+        Assert.False(CanExpand(msg));
     }
 
     [Fact]
@@ -137,24 +140,26 @@ public class ToolCallExpandTests
     }
 
     [Fact]
-    public void CompletedCommand_WithIntentLoggedResult_ButHasInput_CanExpand()
+    public void CompletedNonBashCommand_WithIntentLoggedResult_NotExpandable()
     {
+        // Non-bash tools with unusable output and no expandable output are not expandable
+        // (their input is already shown inline in action-input)
         var msg = ChatMessage.ToolCallMessage("report_intent", "call-4", "{\"intent\":\"Fixing bug\"}");
         msg.IsComplete = true;
         msg.Content = "Intent logged";
         Assert.False(HasOutput(msg));
-        Assert.True(CanExpand(msg));
+        Assert.False(CanExpand(msg));
     }
 
     [Fact]
-    public void RunningNonBashTool_DoesNotShowDuplicateFullInput()
+    public void RunningNonBashTool_NotExpandableAndNoFullInput()
     {
         // Non-bash tools already show input in the always-visible action-input section,
-        // so the else-if full-input block must NOT render for them (prevents duplication).
+        // so they are not expandable and the full-input block does NOT render.
         var msg = ChatMessage.ToolCallMessage("edit", "call-5", "{\"path\":\"/src/file.cs\"}");
         msg.IsCollapsed = false;
-        Assert.True(CanExpand(msg)); // header is expandable
-        Assert.False(ShowsFullInputWhenNoOutput(msg)); // but full-input block skipped for non-bash
+        Assert.False(CanExpand(msg)); // not expandable (input already visible inline)
+        Assert.False(ShowsFullInputWhenNoOutput(msg)); // full-input block skipped for non-bash
     }
 
     [Fact]
@@ -173,5 +178,16 @@ public class ToolCallExpandTests
         Assert.True(msg.IsCollapsed);
         Assert.True(CanExpand(msg));
         Assert.False(ShowsFullInputWhenNoOutput(msg)); // collapsed = no full input
+    }
+
+    [Fact]
+    public void CompletedNonBashTool_WithOutput_IsExpandable()
+    {
+        // Non-bash tools become expandable when they complete with output
+        var msg = ChatMessage.ToolCallMessage("grep", "call-8", "{\"pattern\":\"TODO\"}");
+        msg.IsComplete = true;
+        msg.Content = "src/file.cs:10: // TODO fix this";
+        Assert.True(HasOutput(msg));
+        Assert.True(CanExpand(msg));
     }
 }
