@@ -585,7 +585,7 @@ else
                             </div>
                         }
 
-                        @if (group.IsMultiAgent && !group.IsCollapsed)
+                        @if (group.IsMultiAgent && !group.IsCollapsed && groupProvider == null)
                         {
                             var maGroupId = group.Id;
                             <div class="sidebar-ma-controls" @onclick:stopPropagation="true">
