@@ -1,5 +1,9 @@
 # PolyPilot — Copilot Instructions
 
+## SDK-First Development
+
+Before implementing new session lifecycle, orchestration, watchdog, or event handling code, check the Copilot SDK API surface. The `copilot-sdk-reference` skill has the complete v0.2.1 API reference (453 types, 76 events, 6 hooks, 16 RPC APIs). The `processing-state-safety` and `multi-agent-orchestration` skills each contain SDK migration matrices for their domains. Prefer SDK APIs over custom implementations. When custom code is necessary, add a `// SDK-gap: <reason>` comment explaining why. When updating the SDK NuGet package, re-evaluate all three skills.
+
 ## Build & Deploy Commands
 
 ### Mac Catalyst (primary dev target)
@@ -284,12 +288,12 @@ All mutations to `state.Info.IsProcessing` must be marshaled to the UI thread. S
 - **SendAsync error paths**: Run on UI thread inline (in SendPromptAsync's catch blocks)
 
 ### Model Selection
-The model is set at **session creation time** via `SessionConfig.Model`. The SDK does **not** support changing models per-message or mid-session — `MessageOptions` has no `Model` property. 
+The model is set at **session creation time** via `SessionConfig.Model`. The SDK provides `session.Rpc.Model.SwitchToAsync(model, reasoningEffort?)` for mid-session model switching, but PolyPilot has not adopted it — currently the session must be destroyed and recreated to change models. `MessageOptions` has no `Model` property (no per-message model selection).
 
 When a user changes the model via the UI dropdown:
 - `session.Model` is updated locally (affects UI display only)
 - The SDK continues using the original model from session creation
-- To truly switch models, the session must be destroyed and recreated
+- To truly switch models, the session must be destroyed and recreated (or `SwitchToAsync` could be adopted)
 
 `GetSessionModel` prioritizes: (1) user's explicit choice (`session.Model`), (2) backend-reported model from usage info, (3) `DefaultModel` fallback. `ShouldAcceptObservedModel()` in `ModelHelper.cs` prevents `SessionUsageInfoEvent` and `AssistantUsageEvent` from overwriting an explicit user model selection — the observed model is only accepted if no explicit choice was made or if the observed model matches the explicit choice.
 
