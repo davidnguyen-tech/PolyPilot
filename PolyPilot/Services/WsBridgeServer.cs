@@ -25,6 +25,7 @@ public class WsBridgeServer : IDisposable
     private CopilotService? _copilot;
     private FiestaService? _fiestaService;
     private RepoManager? _repoManager;
+    private PrLinkService? _prLinkService;
     private readonly ConcurrentDictionary<string, WebSocket> _clients = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _clientSendLocks = new();
     private long _lastPairRequestAcceptedAtTicks = DateTime.MinValue.Ticks;
@@ -267,6 +268,11 @@ public class WsBridgeServer : IDisposable
     public void SetRepoManager(RepoManager repoManager)
     {
         _repoManager ??= repoManager;
+    }
+
+    public void SetPrLinkService(PrLinkService prLinkService)
+    {
+        _prLinkService ??= prLinkService;
     }
 
     public void Stop()
@@ -1493,6 +1499,7 @@ public class WsBridgeServer : IDisposable
             ProcessingStartedAt = s.ProcessingStartedAt,
             ToolCallCount = s.ToolCallCount,
             ProcessingPhase = s.ProcessingPhase,
+            PrNumber = s.PrNumber ?? ResolvePrNumber(s),
         }).ToList();
 
         return new SessionsListPayload
@@ -1504,6 +1511,47 @@ public class WsBridgeServer : IDisposable
             ServerMachineName = Environment.MachineName,
             AvailableModels = _copilot.AvailableModels.Count > 0 ? _copilot.AvailableModels : null,
         };
+    }
+
+    private int? ResolvePrNumber(AgentSessionInfo session)
+    {
+        // Try worktree lookup first
+        if (_repoManager != null && _copilot != null)
+        {
+            // Snapshot Organization.Sessions — it's a plain List<T> mutated on the UI thread,
+            // but this method runs on ThreadPool threads (timer/WebSocket). ToList() avoids
+            // InvalidOperationException from concurrent modification.
+            var wtId = session.WorktreeId;
+            if (wtId == null)
+            {
+                try
+                {
+                    var sessionMetas = _copilot.Organization.Sessions.ToList();
+                    wtId = sessionMetas.FirstOrDefault(m => m.SessionName == session.Name)?.WorktreeId;
+                }
+                catch (InvalidOperationException) { /* concurrent modification — skip fallback */ }
+            }
+            if (wtId != null)
+            {
+                var prNum = _repoManager.Worktrees.FirstOrDefault(w => w.Id == wtId)?.PrNumber;
+                if (prNum.HasValue) return prNum;
+            }
+        }
+        // Fall back to PrLinkService cache (read-only, no fetch).
+        // Only populated after desktop has viewed the session's ExpandedSessionView,
+        // which calls PrLinkService.GetPrUrlForDirectoryAsync(). Cache TTL is 5 minutes.
+        // Sessions never opened on desktop will have no cached PR URL.
+        if (_prLinkService != null && !string.IsNullOrEmpty(session.WorkingDirectory))
+        {
+            var url = _prLinkService.GetCachedPrUrl(session.WorkingDirectory);
+            if (url != null)
+            {
+                var lastSlash = url.LastIndexOf('/');
+                if (lastSlash >= 0 && lastSlash < url.Length - 1 && int.TryParse(url[(lastSlash + 1)..], out var num))
+                    return num;
+            }
+        }
+        return null;
     }
 
     private void DebouncedBroadcastState()
