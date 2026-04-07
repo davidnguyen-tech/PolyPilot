@@ -267,11 +267,13 @@ public partial class CopilotService
 
     private static ChatMessage? FindReasoningMessage(AgentSessionInfo info, string reasoningId)
     {
-        // Exact ID match first, then most recent incomplete reasoning message.
+        // Only reuse an already-open reasoning bubble. If a provider reuses the same
+        // reasoning ID on a later turn, do not reopen or mutate the older completed entry.
         if (!string.IsNullOrEmpty(reasoningId))
         {
             var exact = info.History.LastOrDefault(m =>
                 m.MessageType == ChatMessageType.Reasoning &&
+                !m.IsComplete &&
                 string.Equals(m.ReasoningId, reasoningId, StringComparison.Ordinal));
             if (exact != null) return exact;
         }
@@ -334,9 +336,14 @@ public partial class CopilotService
             // Must add to History on UI thread to avoid concurrent List<T> mutation
             InvokeOnUI(() =>
             {
-                state.Info.History.Add(reasoningMsg);
-                state.Info.MessageCount = state.Info.History.Count;
-                // Remove from pending — now findable via History search
+                // Guard: CompleteReasoningMessages may have already drained this message
+                // into History if TurnEnd fired before this deferred callback executed.
+                if (!state.Info.History.Contains(reasoningMsg))
+                {
+                    state.Info.History.Add(reasoningMsg);
+                    state.Info.MessageCount = state.Info.History.Count;
+                }
+                // Always clean up pending map regardless of whether we added to History
                 state.PendingReasoningMessages.TryRemove(normalizedReasoningId, out _);
             });
             isNew = true;
@@ -362,6 +369,25 @@ public partial class CopilotService
 
     private void CompleteReasoningMessages(SessionState state, string sessionName)
     {
+        // Drain any messages still in PendingReasoningMessages into History.
+        // When ApplyReasoningUpdate creates a new reasoning message, it stores it in
+        // PendingReasoningMessages immediately but defers History.Add via InvokeOnUI.
+        // If CompleteReasoningMessages runs before that deferred add executes (e.g., when
+        // OnTurnEnd and OnReasoningReceived are both queued on the UI thread), the message
+        // won't be in History yet and would be left permanently incomplete.
+        if (!state.PendingReasoningMessages.IsEmpty)
+        {
+            foreach (var kvp in state.PendingReasoningMessages)
+            {
+                if (!state.Info.History.Contains(kvp.Value))
+                {
+                    state.Info.History.Add(kvp.Value);
+                    state.Info.MessageCount = state.Info.History.Count;
+                }
+            }
+            state.PendingReasoningMessages.Clear();
+        }
+
         var openReasoningMessages = state.Info.History
             .Where(m => m.MessageType == ChatMessageType.Reasoning && !m.IsComplete)
             .ToList();
