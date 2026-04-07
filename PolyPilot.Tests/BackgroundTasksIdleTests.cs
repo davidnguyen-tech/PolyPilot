@@ -228,7 +228,7 @@ public class BackgroundTasksIdleTests
         var source = File.ReadAllText(Path.Combine(GetRepoRoot(),
             "PolyPilot", "Services", "CopilotService.Events.cs"));
 
-        var handlerStart = source.IndexOf("case SessionBackgroundTasksChangedEvent:");
+        var handlerStart = source.IndexOf("case SessionBackgroundTasksChangedEvent");
         Assert.True(handlerStart >= 0, "SessionBackgroundTasksChangedEvent handler not found");
 
         // Find the next case or closing brace to bound the handler
@@ -236,9 +236,9 @@ public class BackgroundTasksIdleTests
         if (handlerEnd < 0) handlerEnd = source.Length;
         var handler = source.Substring(handlerStart, handlerEnd - handlerStart);
 
-        // Must stamp SubagentDeferStartedAtTicks via CompareExchange
+        // Must stamp SubagentDeferStartedAtTicks via RefreshDeferredBackgroundTaskTracking
+        Assert.Contains("RefreshDeferredBackgroundTaskTracking", handler);
         Assert.Contains("SubagentDeferStartedAtTicks", handler);
-        Assert.Contains("CompareExchange", handler);
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class BackgroundTasksIdleTests
         var source = File.ReadAllText(Path.Combine(GetRepoRoot(),
             "PolyPilot", "Services", "CopilotService.Events.cs"));
 
-        var handlerStart = source.IndexOf("case SessionBackgroundTasksChangedEvent:");
+        var handlerStart = source.IndexOf("case SessionBackgroundTasksChangedEvent");
         Assert.True(handlerStart >= 0, "SessionBackgroundTasksChangedEvent handler not found");
 
         var handlerEnd = source.IndexOf("case System", handlerStart + 1);
@@ -285,6 +285,61 @@ public class BackgroundTasksIdleTests
         Interlocked.CompareExchange(ref field, now, 0L);
 
         Assert.Equal(now, field);
+    }
+
+    [Fact]
+    public void SessionIdle_StalePayload_NotDeferredWhenBgTasksAlreadyConfirmedEmpty()
+    {
+        // Regression: session.idle arrives with shells=2 but backgroundTasksChanged already
+        // confirmed shells=0 (race — CLI snapshotted before completions landed). PolyPilot
+        // must NOT defer in this case.
+        //
+        // The fix uses a sentinel: DeferredBackgroundTaskFingerprint == string.Empty means
+        // "backgroundTasksChanged explicitly confirmed zero tasks this turn." null means
+        // "no backgroundTasksChanged event has fired yet" (initial/reset state). Only the
+        // empty-string sentinel triggers stale detection, preventing false positives when
+        // session.idle arrives with genuine new tasks before backgroundTasksChanged fires.
+        var source = File.ReadAllText(Path.Combine(GetRepoRoot(),
+            "PolyPilot", "Services", "CopilotService.Events.cs"));
+
+        var idleHandlerStart = source.IndexOf("case SessionIdleEvent idle:");
+        Assert.True(idleHandlerStart >= 0, "SessionIdleEvent handler not found");
+        var idleHandlerEnd = source.IndexOf("case SessionBackgroundTasks", idleHandlerStart + 1);
+        if (idleHandlerEnd < 0) idleHandlerEnd = source.Length;
+        var handler = source.Substring(idleHandlerStart, idleHandlerEnd - idleHandlerStart);
+
+        // The handler must capture state before RefreshDeferredBackgroundTaskTracking
+        Assert.Contains("preIdleFingerprint", handler);
+        Assert.Contains("preIdleTicks", handler);
+        // Staleness check uses string.Empty sentinel (not null) to distinguish confirmed-empty
+        // from never-seen — guards against false positives on first idle with genuine tasks
+        Assert.Contains("idlePayloadIsStale", handler);
+        Assert.Contains("preIdleFingerprint == string.Empty", handler);
+        Assert.Contains("preIdleTicks == 0", handler);
+        Assert.Contains("tracking.Snapshot.HasAny", handler);
+        // hasActiveTasks must be guarded by !idlePayloadIsStale
+        Assert.Contains("!idlePayloadIsStale", handler);
+    }
+
+    [Fact]
+    public void RefreshDeferredBackgroundTaskTracking_SetsEmptyStringSentinel_WhenTasksConfirmedGone()
+    {
+        // When backgroundTasksChanged fires with no tasks, RefreshDeferredBackgroundTaskTracking
+        // must set DeferredBackgroundTaskFingerprint = string.Empty (not null). This sentinel
+        // is what distinguishes "confirmed empty" from "never seen" (null).
+        var source = File.ReadAllText(Path.Combine(GetRepoRoot(),
+            "PolyPilot", "Services", "CopilotService.Events.cs"));
+
+        var methodStart = source.IndexOf("private static (BackgroundTaskSnapshot Snapshot, long FirstSeenTicks) RefreshDeferredBackgroundTaskTracking(");
+        Assert.True(methodStart >= 0, "RefreshDeferredBackgroundTaskTracking not found");
+        var methodEnd = source.IndexOf("\n    private ", methodStart + 1);
+        if (methodEnd < 0) methodEnd = source.Length;
+        var method = source.Substring(methodStart, methodEnd - methodStart);
+
+        // Must set string.Empty sentinel (not null) when clearing after confirmed-empty event
+        Assert.Contains("string.Empty", method);
+        // Must NOT set null when clearing in this path (null is reserved for initial/reset state)
+        Assert.DoesNotContain("DeferredBackgroundTaskFingerprint = null", method);
     }
 
     private static string GetRepoRoot()
