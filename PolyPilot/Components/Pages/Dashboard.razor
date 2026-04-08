@@ -3058,8 +3058,36 @@
 
     private async Task TriggerAttach(string sessionName)
     {
-        var fileId = $"file-{sessionName.Replace(" ", "-")}";
-        await JS.InvokeVoidAsync("clickElement", fileId);
+        if (PlatformHelper.IsMobile)
+        {
+            // On mobile, use MAUI MediaPicker for the native photo picker experience.
+            // Falls back to FilePicker if MediaPicker is unavailable.
+            try
+            {
+                var photo = await MediaPicker.PickPhotoAsync(new MediaPickerOptions
+                {
+                    Title = "Select an image"
+                });
+                if (photo == null) return;
+
+                using var stream = await photo.OpenReadAsync();
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                var base64 = Convert.ToBase64String(ms.ToArray());
+                var ext = Path.GetExtension(photo.FileName)?.TrimStart('.') ?? "png";
+                var inputId = $"input-{sessionName.Replace(" ", "-")}";
+                await JsImagePasted(base64, photo.FileName, ext, inputId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"MediaPicker error: {ex.Message}");
+            }
+        }
+        else
+        {
+            var fileId = $"file-{sessionName.Replace(" ", "-")}";
+            await JS.InvokeVoidAsync("clickElement", fileId);
+        }
     }
 
     private void TouchMru(string sessionName)

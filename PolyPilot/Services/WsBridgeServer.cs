@@ -337,7 +337,7 @@ public class WsBridgeServer : IDisposable
     /// Dispatch a bridge prompt with orchestrator routing on the UI thread.
     /// Shared by both the live send_message handler and the drain replay loop.
     /// </summary>
-    private async Task DispatchBridgePromptAsync(string sessionName, string message, string? agentMode, CancellationToken ct = default)
+    private async Task DispatchBridgePromptAsync(string sessionName, string message, string? agentMode, List<string>? imagePaths = null, CancellationToken ct = default)
     {
         try
         {
@@ -354,7 +354,7 @@ public class WsBridgeServer : IDisposable
                 }
                 else
                 {
-                    await _copilot.SendPromptAsync(sessionName, message, cancellationToken: ct, agentMode: agentMode);
+                    await _copilot.SendPromptAsync(sessionName, message, imagePaths, cancellationToken: ct, agentMode: agentMode);
                 }
             });
         }
@@ -871,9 +871,9 @@ public class WsBridgeServer : IDisposable
 
                 messageBuffer.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
 
-                if (messageBuffer.Length > 256 * 1024)
+                if (messageBuffer.Length > 16 * 1024 * 1024)
                 {
-                    try { await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message exceeds 256KB limit", CancellationToken.None); } catch { }
+                    try { await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message exceeds 16MB limit", CancellationToken.None); } catch { }
                     break; // guard against unbounded frames
                 }
 
@@ -927,12 +927,33 @@ public class WsBridgeServer : IDisposable
 
                 case BridgeMessageTypes.SendMessage:
                     var sendReq = msg.GetPayload<SendMessagePayload>();
-                    if (sendReq != null && !string.IsNullOrWhiteSpace(sendReq.SessionName) && !string.IsNullOrWhiteSpace(sendReq.Message))
+                    if (sendReq != null && !string.IsNullOrWhiteSpace(sendReq.SessionName) && (!string.IsNullOrWhiteSpace(sendReq.Message) || sendReq.ImageAttachments is { Count: > 0 }))
                     {
                         BridgeLog($"[BRIDGE] Client sending message to '{sendReq.SessionName}'");
-                        // Fire-and-forget: don't block the client message loop waiting for the full response.
-                        // SendPromptAsync awaits ResponseCompletion (minutes). Responses stream back via events.
-                        // Blocking here prevents the client from sending abort, switch, or other commands.
+
+                        // Decode any image attachments from base64 to temp files
+                        List<string>? sendImagePaths = null;
+                        if (sendReq.ImageAttachments is { Count: > 0 })
+                        {
+                            var tempDir = Path.Combine(Path.GetTempPath(), "PolyPilot-images");
+                            Directory.CreateDirectory(tempDir);
+                            sendImagePaths = new();
+                            foreach (var att in sendReq.ImageAttachments)
+                            {
+                                try
+                                {
+                                    var ext = Path.GetExtension(att.FileName);
+                                    if (string.IsNullOrEmpty(ext)) ext = ".png";
+                                    var tempPath = Path.Combine(tempDir, $"{Guid.NewGuid()}{ext}");
+                                    await File.WriteAllBytesAsync(tempPath, Convert.FromBase64String(att.Base64Data), ct);
+                                    sendImagePaths.Add(tempPath);
+                                }
+                                catch (Exception ex) { BridgeLog($"[BRIDGE] Failed to decode image '{att.FileName}': {ex.Message}"); }
+                            }
+                            if (sendImagePaths.Count == 0) sendImagePaths = null;
+                            else BridgeLog($"[BRIDGE] Decoded {sendImagePaths.Count} image attachment(s) for '{sendReq.SessionName}'");
+                        }
+
                         var sendSession = sendReq.SessionName;
                         var sendMessage = sendReq.Message;
                         var sendAgentMode = sendReq.AgentMode;
@@ -948,8 +969,15 @@ public class WsBridgeServer : IDisposable
                         // Dispatch with orchestrator routing on the UI thread (fire-and-forget).
                         _ = Task.Run(async () =>
                         {
-                            try { await DispatchBridgePromptAsync(sendSession, sendMessage, sendAgentMode, ct); }
+                            try { await DispatchBridgePromptAsync(sendSession, sendMessage, sendAgentMode, sendImagePaths, ct); }
                             catch (Exception ex) { BridgeLog($"[BRIDGE] SendPromptAsync error for '{sendSession}': {ex.Message}"); }
+                            finally
+                            {
+                                // Clean up temp image files after send completes
+                                if (sendImagePaths != null)
+                                    foreach (var p in sendImagePaths)
+                                        try { File.Delete(p); } catch { }
+                            }
                         });
                     }
                     break;

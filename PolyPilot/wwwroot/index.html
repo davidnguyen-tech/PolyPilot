@@ -120,6 +120,33 @@
             }
         }, true);
 
+        // File picker change handler — reads selected images and sends to Blazor.
+        // Covers the attach button on all platforms (especially mobile where
+        // paste/drag-drop aren't available).
+        document.addEventListener('change', function(e) {
+            if (e.target.type !== 'file' || !e.target.id.startsWith('file-')) return;
+            if (!window.__dashRef) return;
+            var files = e.target.files;
+            if (!files) return;
+            // Derive the input ID from the file input ID (file-X → input-X)
+            var inputId = 'input-' + e.target.id.substring(5);
+            for (var i = 0; i < files.length; i++) {
+                if (!files[i].type.startsWith('image/')) continue;
+                (function(f) {
+                    var reader = new FileReader();
+                    reader.onload = function() {
+                        var base64 = reader.result.split(',')[1];
+                        var ext = (f.name && f.name.includes('.')) ? f.name.split('.').pop() : 'png';
+                        var name = f.name || ('attached-image.' + ext);
+                        window.__dashRef.invokeMethodAsync('JsImagePasted', base64, name, ext, inputId);
+                    };
+                    reader.readAsDataURL(f);
+                })(files[i]);
+            }
+            // Reset so the same file can be re-selected
+            e.target.value = '';
+        });
+
         // Global image drop handler for chat input areas
         document.addEventListener('dragover', function(e) {
             var zone = e.target.closest && (e.target.closest('.input-area') || e.target.closest('.card-input'));
